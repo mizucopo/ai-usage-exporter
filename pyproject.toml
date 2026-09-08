@@ -1,12 +1,13 @@
 [project]
 name = "ai-usage-exporter"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI usage exporter"
 authors = [
     {name = "みず", email = "mizu.copo@gmail.com"}
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "prometheus-client>=0.26.0",
 ]
 
 [dependency-groups]

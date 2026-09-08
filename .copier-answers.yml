@@ -10,7 +10,7 @@ docker_smoke_command: ''
 dockerfile_path: Dockerfile
 project_description: AI usage exporter
 project_name: ai-usage-exporter
-project_version: 0.1.0
+project_version: 0.2.0
 python_project_kind: application
 python_version: '3.14'
 use_aws_ecr: false
