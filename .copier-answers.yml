@@ -1,4 +1,4 @@
-_commit: 547036c
+_commit: 0200f14
 _src_path: gh:mizucopo/repo-template
 author_email: mizu.copo@gmail.com
 author_name: みず
@@ -6,6 +6,9 @@ docker_build_context: .
 docker_image_name: ai-usage-exporter
 docker_login_username: mizucopo
 docker_registry: mizucopo
+docker_release_platforms:
+- linux/amd64
+- linux/arm64
 docker_smoke_command: ''
 dockerfile_path: Dockerfile
 project_description: AI usage exporter

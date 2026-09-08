@@ -379,7 +379,11 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.version }}
         run: bash .github/scripts/manage-docker-image-owner.sh verify "$TAG"
-
+      - name: Set up QEMU
+        if: steps.image-state.outputs.version_exists != 'true'
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64
       - name: Set up Docker Buildx
         if: steps.image-state.outputs.version_exists != 'true'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -402,6 +406,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: "linux/amd64,linux/arm64"
           tags: |
             mizucopo/ai-usage-exporter:${{ steps.version.outputs.version }}
 
