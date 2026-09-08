@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "prometheus-client>=0.26.0",
 ]
 
 [dependency-groups]
