@@ -47,7 +47,10 @@ def parse_limits(result: dict[str, object], now: float) -> tuple[QuotaWindow, ..
         raise ValueError("Unexpected quota bucket")
     windows = []
     for key in ("primary", "secondary"):
-        window = _object(bucket.get(key))
+        value = bucket.get(key)
+        if value is None:
+            continue
+        window = _object(value)
         duration = _number(window.get("windowDurationMins"))
         label = {300.0: "5h", 10080.0: "weekly"}.get(duration)
         resets_at = _number(window.get("resetsAt"))
@@ -60,8 +63,8 @@ def parse_limits(result: dict[str, object], now: float) -> tuple[QuotaWindow, ..
                 resets_at,
             )
         )
-    if {window.label for window in windows} != {"5h", "weekly"}:
-        raise ValueError("Both quota windows are required")
+    if not windows or len({window.label for window in windows}) != len(windows):
+        raise ValueError("Expected distinct quota windows")
     return tuple(windows)
 
 

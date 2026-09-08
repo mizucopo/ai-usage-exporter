@@ -59,6 +59,38 @@ def test_exports_both_quotas_and_reset_times() -> None:
     assert "ai_usage_exporter_last_success_timestamp_seconds 1000.0" in output
 
 
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("slot", ["primary", "secondary"])
+@pytest.mark.parametrize("missing", [True, False])
+@pytest.mark.parametrize(
+    ("duration", "label", "absent_label"),
+    [(10080, "weekly", "5h"), (300, "5h", "weekly")],
+)
+def test_exports_only_the_returned_quota(
+    legacy: bool, slot: str, missing: bool, duration: int, label: str, absent_label: str
+) -> None:
+    bucket: dict[str, object] = {} if missing else {"primary": None, "secondary": None}
+    bucket[slot] = {
+        "usedPercent": 69,
+        "windowDurationMins": duration,
+        "resetsAt": 2000,
+    }
+    result: dict[str, object] = (
+        {"rateLimits": bucket} if legacy else {"rateLimitsByLimitId": {"codex": bucket}}
+    )
+
+    output = scrape(UsageCollector(lambda: result, wall_time=lambda: 1000))
+
+    assert f'codex_rate_limit_remaining_ratio{{window="{label}"}} 0.31' in output
+    assert (
+        f'codex_rate_limit_reset_timestamp_seconds{{window="{label}"}} 2000.0' in output
+    )
+    assert f'codex_rate_limit_reset_seconds{{window="{label}"}} 1000.0' in output
+    assert f'window="{absent_label}"' not in output
+    assert "ai_usage_exporter_scrape_success 1.0" in output
+    assert "ai_usage_exporter_last_success_timestamp_seconds 1000.0" in output
+
+
 def test_cache_reuses_quotas_but_countdown_keeps_advancing() -> None:
     clock = Clock()
     requests = 0
@@ -156,6 +188,60 @@ def legacy_bucket() -> dict[str, object]:
             "resetsAt": 10000,
         },
     }
+
+
+def test_refresh_to_single_quota_removes_absent_values_and_preserves_cache() -> None:
+    clock = Clock()
+    bucket = legacy_bucket()
+    requests = 0
+
+    def fetch() -> dict[str, object]:
+        nonlocal requests
+        requests += 1
+        if requests == 3:
+            raise CodexError("Authentication failed")
+        return {"rateLimits": bucket}
+
+    collector = UsageCollector(
+        fetch, cache_ttl=6000, wall_time=clock.time, monotonic=clock.monotonic
+    )
+    assert 'window="5h"' in scrape(collector)
+    clock.advance(1000)
+    bucket["primary"] = None
+    output = scrape(collector)
+    assert requests == 2
+    assert 'window="5h"' not in output
+    assert 'codex_rate_limit_reset_seconds{window="weekly"} 8000.0' in output
+    assert "ai_usage_exporter_scrape_success 1.0" in output
+
+    clock.advance(1000)
+    output = scrape(collector)
+    assert requests == 2
+    assert 'codex_rate_limit_reset_seconds{window="weekly"} 7000.0' in output
+    assert "ai_usage_exporter_last_success_timestamp_seconds 2000.0" in output
+
+    clock.advance(5000)
+    output = scrape(collector)
+    assert requests == 3
+    assert "codex_rate_limit_" not in output
+    assert "ai_usage_exporter_scrape_success 0.0" in output
+    assert "ai_usage_exporter_last_success_timestamp_seconds 2000.0" in output
+    clock.advance(1)
+    assert scrape(collector) == output
+    assert requests == 3
+
+
+@pytest.mark.parametrize("invalid", [{}, [], "invalid", False, 0])
+def test_malformed_window_is_not_treated_as_absent(invalid: object) -> None:
+    bucket = legacy_bucket()
+    bucket["primary"] = invalid
+
+    output = scrape(
+        UsageCollector(lambda: {"rateLimits": bucket}, wall_time=lambda: 1000)
+    )
+
+    assert "codex_rate_limit_" not in output
+    assert "ai_usage_exporter_scrape_success 0.0" in output
 
 
 @pytest.mark.parametrize("buckets", [{}, {"other": {}}, {"codex": None}])
