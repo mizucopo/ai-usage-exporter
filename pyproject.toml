@@ -1,6 +1,6 @@
 [project]
 name = "ai-usage-exporter"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI usage exporter"
 authors = [
     {name = "みず", email = "mizu.copo@gmail.com"}
