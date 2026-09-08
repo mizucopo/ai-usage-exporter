@@ -39,10 +39,10 @@ def _number(value: object) -> float:
 
 def parse_limits(result: dict[str, object], now: float) -> tuple[QuotaWindow, ...]:
     buckets = result.get("rateLimitsByLimitId")
-    if buckets is None:
-        bucket = _object(result.get("rateLimits"))
-    else:
-        bucket = _object(_object(buckets).get("codex"))
+    selected = None if buckets is None else _object(buckets).get("codex")
+    if selected is None:
+        selected = result.get("rateLimits")
+    bucket = _object(selected)
     if bucket.get("limitId") not in (None, "codex"):
         raise ValueError("Unexpected quota bucket")
     windows = []

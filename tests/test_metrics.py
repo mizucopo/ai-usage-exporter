@@ -142,6 +142,74 @@ def test_periods_are_identified_by_duration_including_legacy(legacy: bool) -> No
     assert 'codex_rate_limit_remaining_ratio{window="weekly"} 0.0' in output
 
 
+def legacy_bucket() -> dict[str, object]:
+    return {
+        "limitId": "codex",
+        "primary": {
+            "usedPercent": 0,
+            "windowDurationMins": 300,
+            "resetsAt": 2000,
+        },
+        "secondary": {
+            "usedPercent": 100,
+            "windowDurationMins": 10080,
+            "resetsAt": 10000,
+        },
+    }
+
+
+@pytest.mark.parametrize("buckets", [{}, {"other": {}}, {"codex": None}])
+def test_uses_legacy_limits_when_codex_bucket_is_absent(
+    buckets: dict[str, object],
+) -> None:
+    result: dict[str, object] = {
+        "rateLimitsByLimitId": buckets,
+        "rateLimits": legacy_bucket(),
+    }
+
+    output = scrape(UsageCollector(lambda: result, wall_time=lambda: 1000))
+
+    assert 'codex_rate_limit_remaining_ratio{window="5h"} 1.0' in output
+    assert 'codex_rate_limit_remaining_ratio{window="weekly"} 0.0' in output
+    assert "ai_usage_exporter_scrape_success 1.0" in output
+
+
+def test_populated_codex_bucket_takes_precedence_over_legacy_limits() -> None:
+    result = limits()
+    result["rateLimits"] = legacy_bucket()
+
+    output = scrape(UsageCollector(lambda: result, wall_time=lambda: 1000))
+
+    assert 'codex_rate_limit_remaining_ratio{window="5h"} 0.75' in output
+    assert 'codex_rate_limit_remaining_ratio{window="weekly"} 0.2' in output
+
+
+@pytest.mark.parametrize("bucket", [{}, {"primary": None}, "invalid"])
+def test_invalid_selected_codex_bucket_does_not_fall_back_to_legacy(
+    bucket: object,
+) -> None:
+    result: dict[str, object] = {
+        "rateLimitsByLimitId": {"codex": bucket},
+        "rateLimits": legacy_bucket(),
+    }
+
+    output = scrape(UsageCollector(lambda: result, wall_time=lambda: 1000))
+
+    assert "codex_rate_limit_" not in output
+    assert "ai_usage_exporter_scrape_success 0.0" in output
+
+
+def test_legacy_fallback_rejects_a_different_limit_id() -> None:
+    bucket = legacy_bucket()
+    bucket["limitId"] = "other"
+    result: dict[str, object] = {"rateLimitsByLimitId": {}, "rateLimits": bucket}
+
+    output = scrape(UsageCollector(lambda: result, wall_time=lambda: 1000))
+
+    assert "codex_rate_limit_" not in output
+    assert "ai_usage_exporter_scrape_success 0.0" in output
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
