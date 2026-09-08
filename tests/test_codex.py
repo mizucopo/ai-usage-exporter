@@ -1,6 +1,8 @@
 import os
+import resource
 import sys
 import textwrap
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -152,3 +154,29 @@ def test_deadline_is_shared_by_initialization_and_limits_request() -> None:
 
     with pytest.raises(CodexError, match="timed out"):
         client.read_limits()
+
+
+def test_reads_limits_with_high_numbered_pipe_descriptors() -> None:
+    original_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if original_limit[1] != resource.RLIM_INFINITY and original_limit[1] < 1200:
+        pytest.skip("Hard descriptor limit does not allow high-numbered pipes")
+    server = """
+        import json
+        import sys
+        request = json.loads(sys.stdin.readline())
+        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)
+        sys.stdin.readline()
+        request = json.loads(sys.stdin.readline())
+        response = {'id': request['id'], 'result': {'rateLimits': {}}}
+        print(json.dumps(response), flush=True)
+    """
+    client = CodexClient(command=[sys.executable, "-c", textwrap.dedent(server)])
+    try:
+        if original_limit[0] != resource.RLIM_INFINITY and original_limit[0] < 1200:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (1200, original_limit[1]))
+        with ExitStack() as files:
+            while files.enter_context(open(os.devnull, "rb")).fileno() < 1024:
+                pass
+            assert client.read_limits() == {"rateLimits": {}}
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, original_limit)

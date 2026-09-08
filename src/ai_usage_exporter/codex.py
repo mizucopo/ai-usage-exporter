@@ -2,7 +2,7 @@
 
 import json
 import os
-import select
+import selectors
 import subprocess
 import time
 from collections.abc import Sequence
@@ -86,29 +86,31 @@ class CodexClient:
     def _receive(
         stream: IO[bytes], request_id: int, deadline: float, buffered: bytearray
     ) -> dict[str, object]:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise CodexError("Codex request timed out")
-            if b"\n" not in buffered:
-                if not select.select([stream], [], [], remaining)[0]:
+        with selectors.DefaultSelector() as selector:
+            selector.register(stream, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise CodexError("Codex request timed out")
-                chunk = os.read(stream.fileno(), 65536)
-                if not chunk:
-                    raise CodexError("Codex closed its response stream")
-                buffered.extend(chunk)
-                if len(buffered) > 1024 * 1024:
-                    raise CodexError("Codex response is too large")
-                continue
-            line, _, tail = buffered.partition(b"\n")
-            buffered[:] = tail
-            message = json.loads(line)
-            if not isinstance(message, dict):
-                raise CodexError("Codex response is not an object")
-            if message.get("id") == request_id:
-                if "error" in message:
-                    raise CodexError("Codex rejected the request")
-                result = message.get("result")
-                if not isinstance(result, dict):
-                    raise CodexError("Codex response has no result object")
-                return cast(dict[str, object], result)
+                if b"\n" not in buffered:
+                    if not selector.select(remaining):
+                        raise CodexError("Codex request timed out")
+                    chunk = os.read(stream.fileno(), 65536)
+                    if not chunk:
+                        raise CodexError("Codex closed its response stream")
+                    buffered.extend(chunk)
+                    if len(buffered) > 1024 * 1024:
+                        raise CodexError("Codex response is too large")
+                    continue
+                line, _, tail = buffered.partition(b"\n")
+                buffered[:] = tail
+                message = json.loads(line)
+                if not isinstance(message, dict):
+                    raise CodexError("Codex response is not an object")
+                if message.get("id") == request_id:
+                    if "error" in message:
+                        raise CodexError("Codex rejected the request")
+                    result = message.get("result")
+                    if not isinstance(result, dict):
+                        raise CodexError("Codex response has no result object")
+                    return cast(dict[str, object], result)
