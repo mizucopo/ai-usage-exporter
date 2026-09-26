@@ -207,22 +207,40 @@ jobs:
             exit 1
           fi
 
-          if [ "$release_exists" = "true" ] && [ -n "${RELEASE_ASSET_NAME:-}" ]; then
-            if ! release_asset_exists="$(
-              jq -r --arg name "$RELEASE_ASSET_NAME" \
-                'any(.assets[]?; .name == $name)' \
-                "$RELEASE_RESPONSE"
-            )"; then
-              echo "::error::Could not inspect assets for GitHub Release $TAG."
-              exit 1
+          if [ -n "${RELEASE_ASSET_NAME:-}" ] && [ -n "${RELEASE_ASSET_NAMES:-}" ]; then
+            echo "::error::Specify only one release asset input."
+            exit 1
+          fi
+
+          if [ "$release_exists" = "true" ] && [ -n "${RELEASE_ASSET_NAME:-}${RELEASE_ASSET_NAMES:-}" ]; then
+            if [ -n "${RELEASE_ASSET_NAMES:-}" ]; then
+              IFS='|' read -r -a expected_assets <<< "$RELEASE_ASSET_NAMES"
+            else
+              expected_assets=("$RELEASE_ASSET_NAME")
             fi
-            case "$release_asset_exists" in
-              true|false) ;;
-              *)
-                echo "::error::GitHub Release $TAG returned an invalid asset state."
+            release_asset_exists=true
+            for asset_name in "${expected_assets[@]}"; do
+              if [ -z "$asset_name" ]; then
+                echo "::error::Release asset name must not be empty."
                 exit 1
-                ;;
-            esac
+              fi
+              if ! asset_exists="$(
+                jq -r --arg name "$asset_name" \
+                  'any(.assets[]?; .name == $name)' \
+                  "$RELEASE_RESPONSE"
+              )"; then
+                echo "::error::Could not inspect assets for GitHub Release $TAG."
+                exit 1
+              fi
+              case "$asset_exists" in
+                true) ;;
+                false) release_asset_exists=false ;;
+                *)
+                  echo "::error::GitHub Release $TAG returned an invalid asset state."
+                  exit 1
+                  ;;
+              esac
+            done
           fi
 
           {
@@ -440,7 +458,7 @@ jobs:
         run: |
           gh release create "$TAG" \
             --latest=false \
-            --title "Release $TAG" \
+            --title "$TAG" \
             --notes "## Docker Image
 
           Pull the Docker image:
