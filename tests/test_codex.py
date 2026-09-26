@@ -2,12 +2,21 @@ import os
 import resource
 import sys
 import textwrap
+import tomllib
 from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 
+from ai_usage_exporter import __version__
 from ai_usage_exporter.codex import CodexClient, CodexError
+
+
+def test_runtime_version_matches_project_version() -> None:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    project_version = tomllib.loads(pyproject.read_text())["project"]["version"]
+
+    assert __version__ == project_version
 
 
 def test_reads_limits_after_initialization() -> None:
