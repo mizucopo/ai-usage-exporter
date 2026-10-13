@@ -3,20 +3,20 @@
     "scheme": "semver",
     "sources": [
       {
-        "path": "pyproject.toml",
+        "path": "Cargo.toml",
         "format": "toml",
-        "key": ["project", "version"]
+        "key": ["package", "version"]
       }
     ],
     "locks": [
-      { "path": "uv.lock", "format": "toml-lock", "package": "ai-usage-exporter", "optional": true }
+      { "path": "Cargo.lock", "format": "toml-lock", "package": "ai-usage-exporter", "optional": true }
     ]
   },
   "publication": {
     "release_tag": "{version}",
     "github_release": true,
 
-    "release_paths": ["pyproject.toml", "Dockerfile"],
+    "release_paths": ["Cargo.toml", "Dockerfile"],
     "latest_image": "extended",
     "images": [
       {

@@ -1,10 +1,10 @@
 # ai-usage-exporter
 
-Codex の5時間・週間の利用制限について、残量とリセットまでの時間を Prometheus に公開する Python 3.14 のカスタムエクスポーターです。単一の ChatGPT アカウントを対象に、Codex CLI の `account/rateLimits/read` で取得した情報を `/metrics` から公開します。
+Codex の5時間・週間の利用制限について、残量とリセットまでの時間を Prometheus に公開する Rust のカスタムエクスポーターです。単一の ChatGPT アカウントを対象に、Codex CLI の `account/rateLimits/read` で取得した情報を `/metrics` から公開します。
 
 ## Docker で起動
 
-イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応し、開発用依存関係を含めません。
+イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成し、Python runtime・uv・venv・開発用依存関係を含めません。
 
 ```bash
 docker build --check .
@@ -35,8 +35,8 @@ curl http://localhost:9173/metrics
 | --- | --- | --- |
 | `AI_USAGE_EXPORTER_HOST` | `0.0.0.0` | HTTP 待受アドレス |
 | `AI_USAGE_EXPORTER_PORT` | `9173` | HTTP ポート（1〜65535） |
-| `AI_USAGE_EXPORTER_CACHE_TTL_SECONDS` | `300` | 取得結果のキャッシュ秒数（正の有限値） |
-| `AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS` | `10` | Codex 起動・初期化・取得全体のタイムアウト秒数（正の有限値） |
+| `AI_USAGE_EXPORTER_CACHE_TTL_SECONDS` | `300` | 取得結果のキャッシュ秒数（正の有限値、Rust の Duration で表現可能な範囲） |
+| `AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS` | `10` | Codex 起動・初期化・取得全体のタイムアウト秒数（正の有限値、Rust の Duration で表現可能な範囲） |
 | `CODEX_HOME` | Docker: `/var/lib/codex` | Codex CLI の認証情報などの保存先 |
 
 例えばキャッシュを60秒に変更する場合、`docker run` に `-e AI_USAGE_EXPORTER_CACHE_TTL_SECONDS=60` を追加します。コンテナー内のポートを変更する場合は `-p` の転送先ポートも合わせてください。
@@ -75,17 +75,20 @@ scrape_configs:
 ## 開発
 
 ```bash
-uv sync --locked
-uv run task check
-PYTHONPATH=src uv run python -m ai_usage_exporter
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo run --locked --bin ai-usage-exporter
 ```
 
 ローカル実行には `PATH` 上の Codex CLI とログイン済みの `CODEX_HOME` が必要です。実装は `src/`、テストは `tests/` に配置します。
 
-Dockerfile、`uv.lock`、`.dockerignore` のアプリケーション入力の許可項目は、このリポジトリで管理します。それ以外の生成ファイルは Copier の標準出力を採用しています。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
+Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、`.dockerignore` のアプリケーション入力の許可項目は、このリポジトリで管理します。それ以外の生成ファイルは Copier の標準出力を採用しています。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
 
 ## Docker Hub への公開
 
 公開先は `mizucopo/ai-usage-exporter`、ログイン名は `mizucopo` です。GitHub Actions の repository secret `DOCKERHUB_TOKEN` に、このイメージへの push 権限を持つトークンを設定してください。
 
-`main` への push で、Docker イメージのバージョンタグと `latest`、Git tag、GitHub Release を作成します。バージョンは `pyproject.toml` の `project.version` を使います。PR では Python 品質チェックと Docker ビルドを実行します。
+PR 全体の差分を分類し、公開する PR には `release:patch`・`release:minor`・`release:major` のラベルを一つ付けます。採番元は `Cargo.toml` の `package.version` で、GitHub Actions が squash merge 後に採番し、Docker イメージ、Git tag、GitHub Release を公開します。PR では Rust 品質チェックと Docker ビルドを実行します。詳細は [CONTRIBUTING.md](CONTRIBUTING.md) と [docs/release.md](docs/release.md) を参照してください。
+
+今回の Rust 移植では性能計測・ベンチマークを行っていません。メモリ、イメージサイズ、起動・応答時間の改善量は未確認です。

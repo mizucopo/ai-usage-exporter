@@ -1,0 +1,19 @@
+[package]
+name = "ai-usage-exporter"
+version = "0.3.1"
+edition = "2024"
+description = "AI usage exporter"
+authors = ["みず <mizu.copo@gmail.com>"]
+
+[dependencies]
+axum = "0.8"
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -75,15 +75,14 @@ jobs:
           export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
           printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
           python3 -I .github/scripts/release.py plan
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Validate Python release
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Validate Rust release
         run: |
-          uv sync --locked
-          uv run task check
+          cargo fmt --all --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+          cargo build --release --locked
 
       - name: Inspect versioned image
         id: image-state
@@ -317,6 +316,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.create-release.outputs.release_id || steps.release-state.outputs.release_id }}
 
+          BUILD_RUST_BINARY: "true"
         run: python3 -I .github/scripts/release.py distribution
 
   promote-latest:
