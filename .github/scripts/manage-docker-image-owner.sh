@@ -28,39 +28,25 @@ esac
 
 case "$operation" in
   verify)
-    if [ "$marker_commit" != "$GITHUB_SHA" ]; then
-      echo "Image tag $tag exists without ownership by $GITHUB_SHA." >&2
+    if [ "$marker_commit" != "$RELEASE_SHA" ]; then
+      echo "Image tag $tag exists without ownership by $RELEASE_SHA." >&2
       exit 1
     fi
     ;;
   record)
-    if [ "$marker_commit" = "$GITHUB_SHA" ]; then
+    if [ "$marker_commit" = "$RELEASE_SHA" ]; then
       exit 0
     fi
     if [ -n "$marker_commit" ]; then
-      if ! git merge-base --is-ancestor "$marker_commit" "$GITHUB_SHA"; then
-        echo "Image tag $tag is already owned by $marker_commit." >&2
-        exit 1
-      fi
-    fi
-    git push \
-      --force-with-lease="$marker_ref:$marker_commit" \
-      origin "$GITHUB_SHA:$marker_ref"
-    ;;
-  release)
-    if [ -z "$marker_commit" ]; then
-      exit 0
-    fi
-    if [ "$marker_commit" != "$GITHUB_SHA" ]; then
-      echo "Refusing to release an image-owner marker held by $marker_commit." >&2
+      echo "Image tag $tag is already owned by $marker_commit." >&2
       exit 1
     fi
     git push \
       --force-with-lease="$marker_ref:$marker_commit" \
-      origin ":$marker_ref"
+      origin "$RELEASE_SHA:$marker_ref"
     ;;
   *)
-    echo "Usage: $0 {verify|record|release} TAG" >&2
+    echo "Usage: $0 {verify|record} TAG" >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,31 @@
+{
+  "version": {
+    "scheme": "semver",
+    "sources": [
+      {
+        "path": "Cargo.toml",
+        "format": "toml",
+        "key": ["package", "version"]
+      }
+    ],
+    "locks": [
+      { "path": "Cargo.lock", "format": "toml-lock", "package": "ai-usage-exporter", "optional": true }
+    ]
+  },
+  "publication": {
+    "release_tag": "{version}",
+    "github_release": true,
+
+    "release_paths": ["Cargo.toml", "Dockerfile"],
+    "latest_image": "extended",
+    "images": [
+      {
+        "name": "extended",
+        "repository": "mizucopo/ai-usage-exporter",
+        "tag": "{version}",
+        "aliases": ["latest"],
+        "registry": "dockerhub"
+      }
+    ]
+  }
+}

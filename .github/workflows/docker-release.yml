@@ -2,154 +2,104 @@ name: Docker Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+  queue: max
 
 jobs:
-  resolve-version:
+  prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      concurrency-key: ${{ steps.concurrency-key.outputs.key }}
+      publish: ${{ steps.prepare.outputs.publish || 'false' }}
+      release_sha: ${{ steps.prepare.outputs.release_sha }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      version: ${{ steps.prepare.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Resolve version
-        id: version
+      - name: Validate release branch
         run: |
-          set -euo pipefail
-
-          fail_version() {
-            printf '%s\n' "$1" > version_check_error.txt
-            echo "::error::$1"
-            exit 1
-          }
-
-
-          VERSION_RAW="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
-
-
-          case "$VERSION_RAW" in
-            *$'\n'*)
-              fail_version "version must contain exactly one line."
-              ;;
-          esac
-
-          VERSION="$(
-            printf '%s' "$VERSION_RAW" \
-              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
-          )"
-
-          if [ -z "$VERSION" ]; then
-            fail_version "version must not be empty."
-          fi
-
-
-          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            fail_version "version is not a valid Docker release tag."
-          fi
-
-          if [ "$VERSION" = "latest" ]; then
-            fail_version "version must not use the reserved Docker tag latest."
-          fi
-
-
-          if ! git check-ref-format "refs/tags/$VERSION"; then
-            fail_version "version is not a valid git tag."
-          fi
-
-          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
-
-
-
-      - name: Derive concurrency key
-        id: concurrency-key
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          key="$(printf '%s' "$VERSION" | sha256sum | cut -d ' ' -f 1)"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-
-  docker-release:
-    needs: resolve-version
-    concurrency:
-      group: docker-release-${{ needs.resolve-version.outputs.concurrency-key }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require main
-        run: |
-          set -euo pipefail
-
-          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "This workflow can only release from main." >&2
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo '::error::Release requires main. Select the main branch when running this workflow manually.'
             exit 1
           fi
-
-      - name: Checkout
+      - name: Checkout control code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Read version
-        id: version
+      - name: Number latest main and reserve its tag
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_AUTHOR_NAME: "\u307f\u305a"
+          GIT_AUTHOR_EMAIL: "mizu.copo@gmail.com"
+          GIT_COMMITTER_NAME: "\u307f\u305a"
+          GIT_COMMITTER_EMAIL: "mizu.copo@gmail.com"
+
+          DOCKERHUB_USERNAME: "mizucopo"
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: python3 -I .github/scripts/release.py prepare
+
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
+    env:
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      DOCKERHUB_USERNAME: "mizucopo"
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout numbering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify numbering commit and read publication data
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
+          export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
+          printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
+          python3 -I .github/scripts/release.py plan
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Validate Rust release
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+          cargo build --release --locked
 
-          fail_version() {
-            printf '%s\n' "$1" > version_check_error.txt
-            echo "::error::$1"
-            exit 1
-          }
-
-
-          VERSION_RAW="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
-
-
-          case "$VERSION_RAW" in
-            *$'\n'*)
-              fail_version "version must contain exactly one line."
-              ;;
-          esac
-
-          VERSION="$(
-            printf '%s' "$VERSION_RAW" \
-              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
-          )"
-
-          if [ -z "$VERSION" ]; then
-            fail_version "version must not be empty."
-          fi
-
-
-          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            fail_version "version is not a valid Docker release tag."
-          fi
-
-          if [ "$VERSION" = "latest" ]; then
-            fail_version "version must not use the reserved Docker tag latest."
-          fi
-
-
-          if ! git check-ref-format "refs/tags/$VERSION"; then
-            fail_version "version is not a valid git tag."
-          fi
-
-          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
-
-
-
-      - name: Inspect release state
+      - name: Inspect versioned image
+        id: image-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I .github/scripts/release.py image-state
+      - name: Classify release version
+        id: metadata
+        run: |
+          is_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "$RELEASE_PLAN_OUTPUT")"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+      - name: Inspect GitHub Release
         id: release-state
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+          INSPECT_DRAFT_RELEASES: "true"
         run: |
           set -euo pipefail
 
@@ -159,6 +109,8 @@ jobs:
           tag_exists=false
           release_exists=false
           release_asset_exists=false
+          release_is_draft=false
+          release_id=
 
           if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
             TAG_SHA="$(git rev-list -n 1 "refs/tags/$TAG")"
@@ -202,6 +154,47 @@ jobs:
               ;;
           esac
 
+          if [ "${INSPECT_DRAFT_RELEASES:-false}" = "true" ]; then
+            # The tag endpoint returns published releases only. Always include every page
+            # of the authenticated listing to detect drafts and duplicate matching tags.
+            if ! gh api --paginate --slurp \
+              "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq --arg tag "$TAG" \
+                '[.[][] | select(.tag_name == $tag)] |
+                 if length == 0 then null
+                 elif length == 1 then .[0]
+                 else error("Multiple GitHub Releases match the tag") end' \
+                > "$RELEASE_RESPONSE"; then
+              echo "::error::Could not inspect draft GitHub Releases for $TAG."
+              exit 1
+            fi
+            if [ -n "${RELEASE_ID:-}" ]; then
+              if ! [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] \
+                || ! jq -e --argjson id "$RELEASE_ID" \
+                  '. == null or .id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::Listed GitHub Release differs from retained ID."
+                exit 1
+              fi
+              gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RELEASE_RESPONSE"
+              if ! jq -e --argjson id "$RELEASE_ID" '.id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::GitHub Release ID differs from retained ID."
+                exit 1
+              fi
+            fi
+            if [ "$(jq -r '. != null' "$RELEASE_RESPONSE")" = "true" ]; then
+              release_exists=true
+            fi
+
+            if [ "$release_exists" = "true" ]; then
+              if ! release_id="$(jq -er '.id | select(type == "number" and . > 0 and floor == .)' "$RELEASE_RESPONSE")" \
+                || ! release_is_draft="$(jq -er '.draft | select(type == "boolean") | tostring' "$RELEASE_RESPONSE")" \
+                || ! jq -e --arg tag "$TAG" '.tag_name == $tag and (.assets | type == "array")' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::GitHub Release $TAG returned invalid release metadata."
+                exit 1
+              fi
+            fi
+          fi
+
           if [ "$release_exists" = "true" ] && [ "$tag_exists" != "true" ]; then
             echo "::error::GitHub Release $TAG exists, but the matching git tag was not found."
             exit 1
@@ -226,7 +219,10 @@ jobs:
               fi
               if ! asset_exists="$(
                 jq -r --arg name "$asset_name" \
-                  'any(.assets[]?; .name == $name)' \
+                  --argjson require_uploaded "${INSPECT_DRAFT_RELEASES:-false}" \
+                  'any(.assets[]?; .name == $name and
+                    ($require_uploaded == false or
+                     (.state == "uploaded" and (.size | type == "number" and . > 0))))' \
                   "$RELEASE_RESPONSE"
               )"; then
                 echo "::error::Could not inspect assets for GitHub Release $TAG."
@@ -247,164 +243,37 @@ jobs:
             echo "tag_exists=$tag_exists"
             echo "release_exists=$release_exists"
             echo "release_asset_exists=$release_asset_exists"
-          } >> "$GITHUB_OUTPUT"
-
-
-
-      - name: Inspect Docker image state
-        id: image-state
-        env:
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_USERNAME: "mizucopo"
-          DOCKERHUB_NAMESPACE: "mizucopo"
-          DOCKERHUB_REPOSITORY: "ai-usage-exporter"
-          TAG: ${{ steps.version.outputs.version }}
-          TAG_EXISTS: ${{ steps.release-state.outputs.tag_exists }}
-        run: |
-          set -euo pipefail
-          AUTH_RESPONSE="$(mktemp)"
-          trap 'rm -f "$AUTH_RESPONSE"' EXIT
-          AUTH_PAYLOAD="$(
-            jq -cn \
-              --arg identifier "$DOCKERHUB_USERNAME" \
-              --arg secret "$DOCKERHUB_TOKEN" \
-              '{identifier: $identifier, secret: $secret}'
-          )"
-
-          set +e
-          AUTH_HTTP_STATUS="$(
-            curl --silent --show-error --location \
-              --output "$AUTH_RESPONSE" \
-              --write-out '%{http_code}' \
-              --header 'Content-Type: application/json' \
-              --data "$AUTH_PAYLOAD" \
-              https://hub.docker.com/v2/auth/token
-          )"
-          CURL_STATUS=$?
-          set -e
-
-          if [ "$CURL_STATUS" -ne 0 ]; then
-            echo "::error::Could not authenticate with the Docker Hub API."
-            exit "$CURL_STATUS"
-          fi
-          if [ "$AUTH_HTTP_STATUS" != "200" ]; then
-            echo "::error::Could not authenticate with the Docker Hub API: HTTP $AUTH_HTTP_STATUS."
-            exit 1
-          fi
-
-          if ! DOCKERHUB_API_TOKEN="$(
-            jq -er '.access_token | select(type == "string" and length > 0)' \
-              "$AUTH_RESPONSE"
-          )"; then
-            echo "::error::Docker Hub authentication response did not contain an access token."
-            exit 1
-          fi
-          echo "::add-mask::$DOCKERHUB_API_TOKEN"
-
-          read_digest() {
-            local image_tag="$1"
-            local response_file
-            local http_status
-            local curl_status
-            local digest
-            response_file="$(mktemp)"
-
-            set +e
-            http_status="$(
-              curl --silent --show-error --location \
-                --output "$response_file" \
-                --write-out '%{http_code}' \
-                --header "Authorization: Bearer $DOCKERHUB_API_TOKEN" \
-                "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/$DOCKERHUB_REPOSITORY/tags/$image_tag"
-            )"
-            curl_status=$?
-            set -e
-
-            if [ "$curl_status" -ne 0 ]; then
-              rm -f "$response_file"
-              echo "::error::Could not inspect Docker Hub image tag $image_tag." >&2
-              return "$curl_status"
+            if [ "${INSPECT_DRAFT_RELEASES:-false}" = "true" ]; then
+              echo "release_is_draft=$release_is_draft"
+              echo "release_id=$release_id"
             fi
-
-            case "$http_status" in
-              200)
-                if ! digest="$(
-                  jq -er \
-                    'def valid_digest:
-                       type == "string" and test("^sha256:[0-9a-f]{64}$");
-                     if has("digest") then
-                       .digest
-                       | select(valid_digest)
-                     elif (.images | type) == "array"
-                       and (.images | length) > 0
-                       and all(.images[].digest; valid_digest)
-                     then
-                       [.images[].digest] | unique | sort | .[]
-                     else
-                       error("Docker Hub tag response did not contain valid image digests")
-                     end' \
-                    "$response_file"
-                )"; then
-                  rm -f "$response_file"
-                  return 1
-                fi
-                rm -f "$response_file"
-                printf '%s\n' "$digest"
-                ;;
-              404)
-                rm -f "$response_file"
-                ;;
-              *)
-                rm -f "$response_file"
-                echo "::error::Could not inspect Docker Hub image tag $image_tag: HTTP $http_status." >&2
-                return 1
-                ;;
-            esac
-          }
-
-          if ! VERSION_DIGEST="$(read_digest "$TAG")"; then
-            echo "::error::Could not resolve a valid digest for image tag $TAG."
-            exit 1
-          fi
-          if ! LATEST_DIGEST="$(read_digest latest)"; then
-            echo "::error::Could not resolve a valid digest for image tag latest."
-            exit 1
-          fi
-
-          version_exists=false
-          latest_exists=false
-          latest_matches=false
-          if [ -n "$VERSION_DIGEST" ]; then
-            version_exists=true
-          fi
-          if [ -n "$LATEST_DIGEST" ]; then
-            latest_exists=true
-          fi
-          if [ "$version_exists" = "true" ] \
-            && [ "$latest_exists" = "true" ] \
-            && [ "$VERSION_DIGEST" = "$LATEST_DIGEST" ]; then
-            latest_matches=true
-          fi
-
-          {
-            echo "version_exists=$version_exists"
-            echo "latest_exists=$latest_exists"
-            echo "latest_matches=$latest_matches"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Verify Docker image ownership
-        if: steps.release-state.outputs.tag_exists != 'true' && steps.image-state.outputs.version_exists == 'true'
+      - name: Reject incomplete public release
+        if: steps.release-state.outputs.release_exists == 'true' && steps.release-state.outputs.release_is_draft != 'true' && steps.image-state.outputs.version_exists != 'true'
+        run: |
+          echo '::error::Published versioned image is missing; refusing to overwrite the release.'
+          exit 1
+      - name: Verify existing image ownership
+        if: steps.image-state.outputs.version_exists == 'true'
         env:
-          TAG: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.image-state.outputs.image_tag }}
         run: bash .github/scripts/manage-docker-image-owner.sh verify "$TAG"
+      - name: Build and validate native image
+        if: steps.image-state.outputs.version_exists != 'true'
+        run: |
+          docker build --check .
+          docker build -t release-check .
+
       - name: Set up QEMU
         if: steps.image-state.outputs.version_exists != 'true'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
+
       - name: Set up Docker Buildx
         if: steps.image-state.outputs.version_exists != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
       - name: Login to Docker Hub
         if: steps.image-state.outputs.version_exists != 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -412,109 +281,90 @@ jobs:
           username: "mizucopo"
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Record Docker image ownership
+      - name: Reserve image ownership
         if: steps.image-state.outputs.version_exists != 'true'
         env:
-          TAG: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.image-state.outputs.image_tag }}
         run: bash .github/scripts/manage-docker-image-owner.sh record "$TAG"
-
-      - name: Build and push
+      - name: Build and push immutable image
         if: steps.image-state.outputs.version_exists != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
           platforms: "linux/amd64,linux/arm64"
-          tags: |
-            mizucopo/ai-usage-exporter:${{ steps.version.outputs.version }}
-
-      - name: Configure Git
-        if: steps.release-state.outputs.tag_exists != 'true'
+          tags: mizucopo/ai-usage-exporter:${{ steps.image-state.outputs.image_tag }}
+      - name: Verify published image
         env:
-          GIT_USER_NAME: "\u307f\u305a"
-          GIT_USER_EMAIL: "mizu.copo@gmail.com"
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "$GIT_USER_NAME"
-          git config user.email "$GIT_USER_EMAIL"
-
-      - name: Create version tag
-        if: steps.release-state.outputs.tag_exists != 'true'
-        env:
-          TAG: ${{ steps.version.outputs.version }}
-        run: |
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "refs/tags/$TAG"
-
-      - name: Release Docker image ownership
-        env:
-          TAG: ${{ steps.version.outputs.version }}
-        run: bash .github/scripts/manage-docker-image-owner.sh release "$TAG"
-
+          : > "$RUNNER_TEMP/image-state"
+          GITHUB_OUTPUT="$RUNNER_TEMP/image-state" python3 -I .github/scripts/release.py image-state
+          grep -qx version_exists=true "$RUNNER_TEMP/image-state"
       - name: Create GitHub Release
+        id: create-release
         if: steps.release-state.outputs.release_exists != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.version }}
-        run: |
-          gh release create "$TAG" \
-            --latest=false \
-            --title "$TAG" \
-            --notes "## Docker Image
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+          IS_PRERELEASE: ${{ steps.metadata.outputs.is_prerelease }}
+          RELEASE_DRAFT: "true"
+        run: python3 -I .github/scripts/release.py create
 
-          Pull the Docker image:
-
-          \`\`\`bash
-          docker pull mizucopo/ai-usage-exporter:$TAG
-          \`\`\`
-
-          ## Links:
-          - [Docker Hub](https://hub.docker.com/r/mizucopo/ai-usage-exporter)
-          - [Source Code](${{ github.server_url }}/${{ github.repository }}/tree/$TAG)
-          "
-
-      - name: Record latest release
+      - name: Add release downloads
         env:
-          IMAGE_TAG: ${{ steps.version.outputs.version }}
-          RELEASE_TAG: ${{ steps.version.outputs.version }}
-        run: bash .github/scripts/authorize-docker-latest.sh record
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.create-release.outputs.release_id || steps.release-state.outputs.release_id }}
+
+          BUILD_RUST_BINARY: "true"
+        run: python3 -I .github/scripts/release.py distribution
 
   promote-latest:
-    needs: docker-release
-    concurrency:
-      group: docker-latest
-      cancel-in-progress: false
+    needs: [prepare, release]
+    if: needs.prepare.outputs.publish == 'true' && needs.release.outputs.is_prerelease == 'false'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
     steps:
-      - name: Checkout
+      - name: Checkout numbering commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
           fetch-depth: 0
 
-      - name: Read latest release
-        id: latest-state
-        run: bash .github/scripts/authorize-docker-latest.sh read
+      - name: Verify numbering commit and read publication data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
+          printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
+          python3 -I .github/scripts/release.py plan
 
+      - name: Check newest completed release
+        id: latest-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I .github/scripts/release.py latest
       - name: Set up Docker Buildx
+        if: steps.latest-state.outputs.promote_latest == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
       - name: Login to Docker Hub
+        if: steps.latest-state.outputs.promote_latest == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: "mizucopo"
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Publish latest tag
+      - name: Publish latest image
+        if: steps.latest-state.outputs.promote_latest == 'true'
         env:
           IMAGE_REPOSITORY: "mizucopo/ai-usage-exporter"
           TAG: ${{ steps.latest-state.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          docker buildx imagetools create \
-            --prefer-index=false \
-            --tag "$IMAGE_REPOSITORY:latest" \
-            "$IMAGE_REPOSITORY:$TAG"
-
+        run: docker buildx imagetools create --prefer-index=false --tag "$IMAGE_REPOSITORY:latest" "$IMAGE_REPOSITORY:$TAG"
       - name: Mark GitHub Release as latest
+        if: steps.latest-state.outputs.promote_latest == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.latest-state.outputs.release_tag }}
         run: gh release edit "$TAG" --latest
