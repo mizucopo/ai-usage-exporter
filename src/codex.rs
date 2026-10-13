@@ -25,13 +25,17 @@ impl std::error::Error for CodexError {}
 
 #[derive(Clone)]
 pub struct CodexClient {
-    timeout: Duration,
+    timeout: f64,
     command: Vec<String>,
 }
 
 impl CodexClient {
     pub fn new(timeout: Duration) -> Self {
-        Self::with_command(
+        Self::with_timeout_seconds(timeout.as_secs_f64())
+    }
+
+    pub fn with_timeout_seconds(timeout: f64) -> Self {
+        Self::with_command_seconds(
             timeout,
             vec![
                 "codex".into(),
@@ -44,13 +48,20 @@ impl CodexClient {
     }
 
     pub fn with_command(timeout: Duration, command: Vec<String>) -> Self {
+        Self::with_command_seconds(timeout.as_secs_f64(), command)
+    }
+
+    pub fn with_command_seconds(timeout: f64, command: Vec<String>) -> Self {
         Self { timeout, command }
     }
 
     pub async fn read_limits(&self) -> Result<Value, CodexError> {
-        let deadline = Instant::now()
-            .checked_add(self.timeout)
-            .ok_or(CodexError("Codex timeout is too large"))?;
+        // Preserve the legacy positive-finite setting range. Subnanosecond
+        // timeouts expire immediately; timeouts beyond Instant's range are
+        // effectively unlimited rather than preventing HTTP startup.
+        let deadline = Duration::try_from_secs_f64(self.timeout)
+            .ok()
+            .and_then(|timeout| Instant::now().checked_add(timeout));
         let (program, arguments) = self
             .command
             .split_first()
@@ -65,7 +76,7 @@ impl CodexClient {
             .map_err(|_| CodexError("Codex process could not start"))?;
         let mut stdin = child.stdin.take().expect("piped stdin");
         let mut stdout = child.stdout.take().expect("piped stdout");
-        let result = timeout_at(deadline, async {
+        let communication = async {
             let mut buffered = Vec::new();
             send(
                 &mut stdin,
@@ -87,9 +98,13 @@ impl CodexClient {
             )
             .await?;
             receive(&mut stdout, 2, &mut buffered).await
-        })
-        .await
-        .unwrap_or(Err(CodexError("Codex request timed out")));
+        };
+        let result = match deadline {
+            Some(deadline) => timeout_at(deadline, communication)
+                .await
+                .unwrap_or(Err(CodexError("Codex request timed out"))),
+            None => communication.await,
+        };
 
         // Reap on every protocol outcome, including timeout and failed writes.
         // kill_on_drop additionally terminates a child if this future is cancelled.

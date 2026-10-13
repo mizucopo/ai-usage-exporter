@@ -126,8 +126,13 @@ impl Default for UsageCollector {
 
 impl UsageCollector {
     pub fn new(cache_ttl: Duration) -> Self {
+        Self::with_cache_ttl_seconds(cache_ttl.as_secs_f64())
+    }
+
+    /// Preserve the configured seconds without Duration range or precision limits.
+    pub fn with_cache_ttl_seconds(cache_ttl: f64) -> Self {
         let started = Instant::now();
-        Self::with_clocks(
+        Self::with_clocks_seconds(
             cache_ttl,
             || {
                 SystemTime::now()
@@ -144,8 +149,17 @@ impl UsageCollector {
         wall_time: impl Fn() -> f64 + Send + Sync + 'static,
         monotonic: impl Fn() -> f64 + Send + Sync + 'static,
     ) -> Self {
+        Self::with_clocks_seconds(cache_ttl.as_secs_f64(), wall_time, monotonic)
+    }
+
+    /// Inject clocks while retaining the legacy positive finite seconds contract.
+    pub fn with_clocks_seconds(
+        cache_ttl: f64,
+        wall_time: impl Fn() -> f64 + Send + Sync + 'static,
+        monotonic: impl Fn() -> f64 + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            cache_ttl: cache_ttl.as_secs_f64(),
+            cache_ttl,
             wall_time: Box::new(wall_time),
             monotonic: Box::new(monotonic),
             cache: Mutex::new(CachedUsage {
@@ -693,6 +707,52 @@ mod tests {
                 .await,
         );
         assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn huge_finite_seconds_cache_failures_beyond_duration_range() {
+        let clock = Clock::new(1000.0);
+        let mono = clock.clone();
+        let collector =
+            UsageCollector::with_clocks_seconds(1e300, || 1000.0, move || mono.0.lock().unwrap().1);
+        let requests = AtomicUsize::new(0);
+        let fetch = || async {
+            requests.fetch_add(1, Ordering::SeqCst);
+            Err::<Value, _>("Upstream failed")
+        };
+        let first = collector.collect_with(fetch).await;
+        assert_failed(&first);
+        clock.advance(1.0);
+        assert_eq!(collector.collect_with(fetch).await, first);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tiny_positive_seconds_keep_precision_and_expire_after_clock_advances() {
+        let clock = Clock::new(1000.0);
+        let mono = clock.clone();
+        let collector = UsageCollector::with_clocks_seconds(
+            1e-300,
+            || 1000.0,
+            move || mono.0.lock().unwrap().1,
+        );
+        let requests = AtomicUsize::new(0);
+        let fetch = || async {
+            requests.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, &str>(limits())
+        };
+        collector.collect_with(fetch).await;
+        // A sub-nanosecond TTL remains positive rather than being rounded to zero.
+        collector.collect_with(fetch).await;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        clock.advance(2e-300);
+        assert!(
+            collector
+                .collect_with(fetch)
+                .await
+                .contains("ai_usage_exporter_scrape_success 1.0")
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

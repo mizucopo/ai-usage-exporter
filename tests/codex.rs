@@ -144,3 +144,23 @@ async fn cancelling_a_fetch_terminates_and_reaps_its_child() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+#[tokio::test]
+async fn very_large_and_tiny_timeouts_preserve_valid_configuration_behavior() {
+    let script = format!("{INITIALIZE}\nprintf '%s\\n' '{{\"id\":2,\"result\":{{}}}}'");
+    let unlimited =
+        CodexClient::with_command_seconds(1e300, vec!["sh".into(), "-c".into(), script]);
+    assert_eq!(unlimited.read_limits().await.unwrap(), json!({}));
+    let immediate = CodexClient::with_command_seconds(
+        1e-300,
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "read -r request; read -r never".into(),
+        ],
+    );
+    assert_eq!(
+        immediate.read_limits().await.unwrap_err().to_string(),
+        "Codex request timed out"
+    );
+}

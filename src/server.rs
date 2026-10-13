@@ -1,6 +1,6 @@
 //! Environment settings and HTTP routing.
 
-use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use axum::{Router, extract::State, http::header, routing::get};
 
@@ -10,8 +10,8 @@ use crate::{codex::CodexClient, metrics::UsageCollector};
 pub struct Settings {
     pub host: String,
     pub port: u16,
-    pub cache_ttl: Duration,
-    pub fetch_timeout: Duration,
+    pub cache_ttl: f64,
+    pub fetch_timeout: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -57,7 +57,7 @@ fn duration_setting(
     env: &HashMap<String, String>,
     name: &'static str,
     default: &str,
-) -> Result<Duration, SettingsError> {
+) -> Result<f64, SettingsError> {
     let seconds = env
         .get(name)
         .map_or(default, String::as_str)
@@ -65,17 +65,12 @@ fn duration_setting(
         .parse::<f64>()
         .ok()
         .filter(|value| value.is_finite() && *value > 0.0);
-    seconds
-        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-        .filter(|duration| !duration.is_zero())
-        .ok_or(SettingsError(match name {
-            "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS" => {
-                "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS must be positive, finite and representable"
-            }
-            _ => {
-                "AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS must be positive, finite and representable"
-            }
-        }))
+    seconds.ok_or(SettingsError(match name {
+        "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS" => {
+            "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS must be positive and finite"
+        }
+        _ => "AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS must be positive and finite",
+    }))
 }
 
 #[derive(Clone)]
@@ -115,8 +110,8 @@ mod tests {
         let defaults = Settings::from_env(&HashMap::new()).unwrap();
         assert_eq!(defaults.host, "0.0.0.0");
         assert_eq!(defaults.port, 9173);
-        assert_eq!(defaults.cache_ttl, Duration::from_secs(300));
-        assert_eq!(defaults.fetch_timeout, Duration::from_secs(10));
+        assert_eq!(defaults.cache_ttl, 300.0);
+        assert_eq!(defaults.fetch_timeout, 10.0);
         let configured = Settings::from_env(&HashMap::from([
             ("AI_USAGE_EXPORTER_HOST".into(), "127.0.0.1".into()),
             ("AI_USAGE_EXPORTER_PORT".into(), "12345".into()),
@@ -129,8 +124,24 @@ mod tests {
         .unwrap();
         assert_eq!(configured.host, "127.0.0.1");
         assert_eq!(configured.port, 12345);
-        assert_eq!(configured.cache_ttl, Duration::from_secs(60));
-        assert_eq!(configured.fetch_timeout, Duration::from_secs_f64(5.5));
+        assert_eq!(configured.cache_ttl, 60.0);
+        assert_eq!(configured.fetch_timeout, 5.5);
+    }
+
+    #[test]
+    fn accepts_every_positive_finite_duration_like_the_python_settings() {
+        for value in ["1e-300", "1e300"] {
+            let settings = Settings::from_env(&HashMap::from([
+                ("AI_USAGE_EXPORTER_CACHE_TTL_SECONDS".into(), value.into()),
+                (
+                    "AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS".into(),
+                    value.into(),
+                ),
+            ]))
+            .unwrap();
+            assert_eq!(settings.cache_ttl, value.parse::<f64>().unwrap());
+            assert_eq!(settings.fetch_timeout, value.parse::<f64>().unwrap());
+        }
     }
 
     #[test]
@@ -138,14 +149,8 @@ mod tests {
         for (name, values) in [
             ("HOST", vec!["", " \t"]),
             ("PORT", vec!["0", "65536", "1.5", "-1", "secret-invalid"]),
-            (
-                "CACHE_TTL_SECONDS",
-                vec!["0", "-1", "inf", "nan", "1e300", "1e-300"],
-            ),
-            (
-                "FETCH_TIMEOUT_SECONDS",
-                vec!["0", "-1", "inf", "nan", "1e300", "1e-300"],
-            ),
+            ("CACHE_TTL_SECONDS", vec!["0", "-1", "inf", "nan"]),
+            ("FETCH_TIMEOUT_SECONDS", vec!["0", "-1", "inf", "nan"]),
         ] {
             for value in values {
                 let env = HashMap::from([(format!("AI_USAGE_EXPORTER_{name}"), value.into())]);

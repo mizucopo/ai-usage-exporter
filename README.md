@@ -35,8 +35,8 @@ curl http://localhost:9173/metrics
 | --- | --- | --- |
 | `AI_USAGE_EXPORTER_HOST` | `0.0.0.0` | HTTP 待受アドレス |
 | `AI_USAGE_EXPORTER_PORT` | `9173` | HTTP ポート（1〜65535） |
-| `AI_USAGE_EXPORTER_CACHE_TTL_SECONDS` | `300` | 取得結果のキャッシュ秒数（正の有限値、Rust の Duration で表現可能な範囲） |
-| `AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS` | `10` | Codex 起動・初期化・取得全体のタイムアウト秒数（正の有限値、Rust の Duration で表現可能な範囲） |
+| `AI_USAGE_EXPORTER_CACHE_TTL_SECONDS` | `300` | 取得結果のキャッシュ秒数（正の有限値） |
+| `AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS` | `10` | Codex 起動・初期化・取得全体のタイムアウト秒数（正の有限値） |
 | `CODEX_HOME` | Docker: `/var/lib/codex` | Codex CLI の認証情報などの保存先 |
 
 例えばキャッシュを60秒に変更する場合、`docker run` に `-e AI_USAGE_EXPORTER_CACHE_TTL_SECONDS=60` を追加します。コンテナー内のポートを変更する場合は `-p` の転送先ポートも合わせてください。

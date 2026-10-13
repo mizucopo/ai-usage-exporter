@@ -20,8 +20,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let router = server::router(
-        Arc::new(UsageCollector::new(settings.cache_ttl)),
-        CodexClient::new(settings.fetch_timeout),
+        Arc::new(UsageCollector::with_cache_ttl_seconds(settings.cache_ttl)),
+        CodexClient::with_timeout_seconds(settings.fetch_timeout),
     );
     let shutdown = async move {
         #[cfg(unix)]
