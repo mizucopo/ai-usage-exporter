@@ -15,7 +15,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = server::Settings::from_env(&std::env::vars().collect())?;
+    let settings = server::Settings::from_process_env()?;
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).await?;

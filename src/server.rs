@@ -26,24 +26,48 @@ impl fmt::Display for SettingsError {
 impl std::error::Error for SettingsError {}
 
 impl Settings {
+    pub fn from_process_env() -> Result<Self, SettingsError> {
+        let mut env = HashMap::new();
+        // Leave unrelated environment bytes (including CODEX_HOME) untouched.
+        for name in [
+            "AI_USAGE_EXPORTER_HOST",
+            "AI_USAGE_EXPORTER_PORT",
+            "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS",
+            "AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS",
+        ] {
+            match std::env::var(name) {
+                Ok(value) => {
+                    env.insert(name.into(), value);
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(SettingsError(
+                        "Exporter settings must contain valid UTF-8 text",
+                    ));
+                }
+            }
+        }
+        Self::from_env(&env)
+    }
+
     pub fn from_env(env: &HashMap<String, String>) -> Result<Self, SettingsError> {
         let host = env
             .get("AI_USAGE_EXPORTER_HOST")
             .cloned()
             .unwrap_or_else(|| "0.0.0.0".into());
-        if host.trim().is_empty() {
+        if host
+            .chars()
+            .all(|value| value.is_whitespace() || matches!(value, '\u{1c}'..='\u{1f}'))
+        {
             return Err(SettingsError("AI_USAGE_EXPORTER_HOST must not be empty"));
         }
-        let port = env
-            .get("AI_USAGE_EXPORTER_PORT")
-            .map_or("9173", String::as_str)
-            .trim()
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port > 0)
-            .ok_or(SettingsError(
-                "AI_USAGE_EXPORTER_PORT must be between 1 and 65535",
-            ))?;
+        let port = crate::python_number::port(
+            env.get("AI_USAGE_EXPORTER_PORT")
+                .map_or("9173", String::as_str),
+        )
+        .ok_or(SettingsError(
+            "AI_USAGE_EXPORTER_PORT must be between 1 and 65535",
+        ))?;
         Ok(Self {
             host,
             port,
@@ -58,13 +82,8 @@ fn duration_setting(
     name: &'static str,
     default: &str,
 ) -> Result<f64, SettingsError> {
-    let seconds = env
-        .get(name)
-        .map_or(default, String::as_str)
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite() && *value > 0.0);
+    let seconds =
+        crate::python_number::positive_float(env.get(name).map_or(default, String::as_str));
     seconds.ok_or(SettingsError(match name {
         "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS" => {
             "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS must be positive and finite"
@@ -145,9 +164,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_numeric_syntax_is_preserved_for_every_numeric_setting() {
+        let settings = Settings::from_env(&HashMap::from([
+            ("AI_USAGE_EXPORTER_PORT".into(), " +٩_١٧٣ ".into()),
+            (
+                "AI_USAGE_EXPORTER_CACHE_TTL_SECONDS".into(),
+                "１_０００".into(),
+            ),
+            (
+                "AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS".into(),
+                "\u{a0}+١_٠.٥e-١\u{85}".into(),
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(settings.port, 9173);
+        assert_eq!(settings.cache_ttl, 1000.0);
+        assert_eq!(settings.fetch_timeout, 1.05);
+    }
+
+    #[test]
     fn rejects_invalid_settings_without_panicking() {
         for (name, values) in [
-            ("HOST", vec!["", " \t"]),
+            ("HOST", vec!["", " \t", "\u{1c}\u{1f}"]),
             ("PORT", vec!["0", "65536", "1.5", "-1", "secret-invalid"]),
             ("CACHE_TTL_SECONDS", vec!["0", "-1", "inf", "nan"]),
             ("FETCH_TIMEOUT_SECONDS", vec!["0", "-1", "inf", "nan"]),

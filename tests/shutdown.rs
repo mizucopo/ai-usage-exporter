@@ -1,9 +1,10 @@
 #![cfg(unix)]
 
 use std::{
+    ffi::OsString,
     io::{Read, Write},
     net::TcpStream,
-    os::unix::fs::PermissionsExt,
+    os::unix::{ffi::OsStringExt, fs::PermissionsExt},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -23,9 +24,12 @@ fn sigint_and_sigterm_drain_inflight_scrapes_and_reap_codex() {
         let directory = tempfile::tempdir().unwrap();
         let fake = directory.path().join("codex");
         let pid_file = directory.path().join("codex.pid");
+        let codex_home = directory
+            .path()
+            .join(OsString::from_vec(b"fake-home-\xff".to_vec()));
         // read blocks on the quota request without spawning grandchildren.
         let script = format!(
-            "#!/bin/sh\nprintf '%s' $$ > '{}'\nread -r request\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread -r note\nread -r request\nread -r never\n",
+            "#!/bin/sh\n[ \"$CODEX_HOME\" = \"$EXPECTED_CODEX_HOME\" ] || exit 1\nprintf '%s' $$ > '{}'\nread -r request\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread -r note\nread -r request\nread -r never\n",
             pid_file.display()
         );
         std::fs::write(&fake, script).unwrap();
@@ -34,8 +38,14 @@ fn sigint_and_sigterm_drain_inflight_scrapes_and_reap_codex() {
         let address = listener.local_addr().unwrap();
         drop(listener);
         let child = Command::new(env!("CARGO_BIN_EXE_ai-usage-exporter"))
+            .env_clear()
             .env("PATH", directory.path())
-            .env("CODEX_HOME", directory.path().join("fake-home"))
+            .env("CODEX_HOME", &codex_home)
+            .env("EXPECTED_CODEX_HOME", &codex_home)
+            .env(
+                OsString::from_vec(b"UNRELATED-\xff".to_vec()),
+                OsString::from_vec(b"unused-\xff".to_vec()),
+            )
             .env("AI_USAGE_EXPORTER_HOST", "127.0.0.1")
             .env("AI_USAGE_EXPORTER_PORT", address.port().to_string())
             .env("AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS", "0.5")
@@ -95,11 +105,23 @@ fn sigint_and_sigterm_drain_inflight_scrapes_and_reap_codex() {
 
 #[test]
 fn invalid_configuration_exits_with_status_two() {
-    let status = Command::new(env!("CARGO_BIN_EXE_ai-usage-exporter"))
-        .env("AI_USAGE_EXPORTER_PORT", "0")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert_eq!(status.code(), Some(2));
+    for value in [OsString::from("0"), OsString::from_vec(vec![0xff])] {
+        let child = Command::new(env!("CARGO_BIN_EXE_ai-usage-exporter"))
+            .env_clear()
+            .env("AI_USAGE_EXPORTER_PORT", value)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut exporter = Exporter(child);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = exporter.0.try_wait().unwrap() {
+                assert_eq!(status.code(), Some(2));
+                break;
+            }
+            assert!(Instant::now() < deadline, "invalid settings were accepted");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
