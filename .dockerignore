@@ -3,7 +3,12 @@
 !Dockerfile
 !pyproject.toml
 !uv.lock
+!.python-version
 !src/
 !src/**
-**/__pycache__/
-**/*.pyc
+**/.git
+**/.env
+**/.env.*
+**/__pycache__
+**/*.py[cod]
+**/.venv

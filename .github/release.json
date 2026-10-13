@@ -1,0 +1,31 @@
+{
+  "version": {
+    "scheme": "semver",
+    "sources": [
+      {
+        "path": "pyproject.toml",
+        "format": "toml",
+        "key": ["project", "version"]
+      }
+    ],
+    "locks": [
+      { "path": "uv.lock", "format": "toml-lock", "package": "ai-usage-exporter", "optional": true }
+    ]
+  },
+  "publication": {
+    "release_tag": "{version}",
+    "github_release": true,
+
+    "release_paths": ["pyproject.toml", "Dockerfile"],
+    "latest_image": "extended",
+    "images": [
+      {
+        "name": "extended",
+        "repository": "mizucopo/ai-usage-exporter",
+        "tag": "{version}",
+        "aliases": ["latest"],
+        "registry": "dockerhub"
+      }
+    ]
+  }
+}

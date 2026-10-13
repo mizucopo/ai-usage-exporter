@@ -4,6 +4,7 @@
 
 Before starting work, read these files relative to the repository root:
 
+- [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release-classification policy.
 - `.codex/project.md`
 - `.codex/languages/python.md`
 
@@ -14,6 +15,13 @@ Within the platform's instruction hierarchy, repository guidance takes precedenc
 - Do not make implementation changes directly on `main`.
 - Use a non-`main` branch for implementation changes.
 - Do not weaken quality checks or test configuration to make a failing change pass.
+
+## Workflow completion
+
+- Reuse explicit user instructions and deterministic repository rules for routine decisions, and carry the requested or explicitly invoked skill through its completion condition within that scope. Do not add a confirmation checkpoint before authorized preparation, commits, push, or PR creation. Preserve the skill's verification requirements.
+- Select the workflow from the original task and its delegated scope. Implementation or Issue work includes PR preparation and review completion. Preserve dedicated workflows and their contracts, including consumer Copier updates; template source changes remain ordinary implementation work.
+- If a named skill is absent from the catalog, read its `SKILL.md` from the supplied path, checkout `.agents/skills/`, or known personal skill source and resolve its references. Continue when readable; report a concrete missing resource if it is unavailable. Catalog omission alone is not a blocker.
+- Ask only when a material implementation decision remains unresolved or the next action lacks authorization. Unapproved external communication or third-party agent requests, merge/deploy/actual release, credentials, permissions and branch protection remain separate authorization boundaries. Honor actual tool or approval denials; repository guidance does not override platform policy.
 
 ## Delegation
 

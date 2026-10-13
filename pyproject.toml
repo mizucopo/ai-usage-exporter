@@ -49,11 +49,16 @@ convention = "google"
 [tool.mypy]
 strict = true
 python_version = "3.14"
-files = ["src", "tests"]
+
+# Discover both roots together so an empty src/ is allowed.
+files = ["."]
+exclude = ["^(?!(src|tests)/)"]
+explicit_package_bases = true
+
 mypy_path = "src:stubs"
 
 [tool.taskipy.tasks]
-check = "ruff check src tests stubs && ruff format --check src tests stubs && mypy && pytest"
+check = "ruff check src tests stubs && ruff format --check src tests stubs && mypy && python tests/run_pytest.py"
 fix = "ruff check --fix src tests stubs && ruff format src tests stubs"
 test = "task check"
 

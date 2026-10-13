@@ -1,4 +1,4 @@
-_commit: fa41199
+_commit: 6ffea39
 _src_path: gh:mizucopo/repo-template
 author_email: mizu.copo@gmail.com
 author_name: みず
@@ -21,9 +21,10 @@ use_chrome_extension: false
 use_dependabot_docker: true
 use_dependabot_github_actions: true
 use_docker: true
+use_gh_actions_codeql: false
+use_gh_actions_docker_project_pipeline: false
 use_gh_actions_docker_quality: true
 use_gh_actions_docker_release: true
-use_gh_actions_pr_tag_check: false
 use_mit_license: false
 use_python: true
 use_rust: false
