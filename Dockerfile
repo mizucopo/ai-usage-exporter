@@ -5,7 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --locked --release --bin ai-usage-exporter
 
-FROM alpine:3.23 AS codex-download
+FROM alpine:3.24 AS codex-download
 RUN apk add --no-cache curl
 ARG TARGETARCH
 RUN set -eu; \
@@ -22,7 +22,7 @@ RUN set -eu; \
     tar -xzf /tmp/codex.tar.gz -C /tmp "$name"; \
     cp "/tmp/$name" /codex; chmod 755 /codex
 
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates \
     && addgroup -g 10001 exporter \
     && adduser -D -u 10001 -G exporter exporter \
