@@ -60,7 +60,7 @@ jobs:
         env:
           DISTRIBUTION_TARGET: ${{ matrix.target }}
           DISTRIBUTION_OUTPUT: ${{ runner.temp }}/native-distribution
-        run: python -I tests/release_smoke.py --target "$DISTRIBUTION_TARGET" --output "$DISTRIBUTION_OUTPUT"
+        run: python -I .github/scripts/release-smoke.py --target "$DISTRIBUTION_TARGET" --output "$DISTRIBUTION_OUTPUT"
       - name: Retain verified distribution
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
