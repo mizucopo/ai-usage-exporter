@@ -131,6 +131,8 @@ scrape_configs:
 
 ## 開発
 
+アプリ本体と通常の品質ゲートは Rust です。Python は共通 release controller と配布 archive の mock 検証に使用する開発・CI 補助依存として残します。native 配布 CI は Python 3.14 を用意します。ローカルの配布検証では Python 3.12 以降と Rust toolchain を使用し、Python の外部 package、uv、pytest、venv は必須ではありません。最終 Docker image と配布バイナリは Python/uv を要求しません。残存ファイル・呼び出し元・保持理由と上流との境界は [Python 補助処理](docs/python-helpers.md) を参照してください。
+
 ```bash
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
