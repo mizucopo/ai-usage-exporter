@@ -15,6 +15,8 @@ Codex の5時間・週間の利用制限について、残量とリセットま�
 
 Windows ZIP は exporter の `.exe`、Linux / macOS の tar.gz は実行ファイルを archive 直下に含みます。Codex CLI は同梱しません。[公式の導入手順](https://github.com/openai/codex#installation)に従って同じ OS / CPU の Codex CLI を別途用意し、`codex --version` が通る PATH に置きます。Windows は native `codex.exe` または公式 npm package の `codex.cmd` と、その package に含まれる native executable に対応します。任意の `.cmd` / PowerShell wrapper は使えません。公式 native archive を使う場合は、実行ファイルを `codex.exe` にリネームして PATH に配置します。
 
+Windows の MSVC バイナリは `VCRUNTIME140.dll` を使用します。起動前に [Microsoft Visual C++ v14 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) の最新の対応 package が導入されていることを確認してください。exporter が x64 なら X64、ARM64 なら ARM64 を選びます。runtime は archive に同梱しません。`VCRUNTIME140.dll` が見つからない場合は、この package を別途導入します。
+
 exporter は scrape 時に Codex の `app-server` を子プロセスとして起動し、認証の保存方式に `file` を指定します。CLI と exporter を同じユーザー・同じ書き込み可能な `CODEX_HOME` で実行し、開始前に Codex CLI でログインしてください。既に file 方式でログイン済みなら、その `CODEX_HOME` を使えます。keyring だけに認証が保存されている場合は、運用者が CLI の file 方式でログインを用意する必要があります。exporter 自身はログインを行いません。
 
 Windows PowerShell（`<tag>` を Downloads の tag に置換）:
