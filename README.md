@@ -61,7 +61,7 @@ PR CI は4対象の native runner で、mock CLI による通信・`/metrics`・
 
 ## Docker で起動
 
-イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成し、Python runtime・uv・venv・開発用依存関係を含めません。
+イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成します。
 
 ```bash
 docker build --check .
@@ -130,8 +130,6 @@ scrape_configs:
 `scrape_timeout` は取得タイムアウトに HTTP 処理の余裕を加えた値にしてください。Prometheus を別コンテナーで動かす場合は、接続可能なエクスポーターのホスト名に置き換えてください。
 
 ## 開発
-
-アプリ本体と通常の品質ゲートは Rust です。Python は共通 release controller と配布 archive の mock 検証に使用する開発・CI 補助依存として残します。native 配布 CI は Python 3.14 を用意します。ローカルの配布検証では Python 3.12 以降と Rust toolchain を使用し、Python の外部 package、uv、pytest、venv は必須ではありません。最終 Docker image と配布バイナリは Python/uv を要求しません。残存ファイル・呼び出し元・保持理由と上流との境界は [Python 補助処理](docs/python-helpers.md) を参照してください。
 
 ```bash
 cargo fmt --all --check

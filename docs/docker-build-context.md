@@ -1,8 +1,6 @@
 # Docker build context
 
-`.dockerignore` は `**` で全入力を除外し、`Dockerfile` と選択した言語の通常 build 入力だけを許可します。Rust は `Cargo.toml`・`Cargo.lock`・`rust-toolchain.toml`・`src/`、Python は `pyproject.toml`・`uv.lock`・`.python-version`・`src/` を許可し、併用時は両方を含みます。`.git`・`.env`・Python cache・仮想環境は source 内でも除外します。root の Cargo `target/` は deny-all で除外し、`src/target/` 等の正当な source は保持します。Dockerfile は project が用意してください。
-
-Python の `application` は src 直下の module を直接実行し、依存だけを install します。`package/library` は src 内の import package と build system を使い、project 自身も install します。独自 metadata が参照する README・LICENSE、package data、追加 lockfile 等が必要なら、その実際の path だけを追加してください。
+`.dockerignore` は `**` で全入力を除外し、`Dockerfile` と Rust の通常 build 入力である `Cargo.toml`・`Cargo.lock`・`rust-toolchain.toml`・`src/` だけを許可します。`.git`・`.env` は source 内でも除外します。root の Cargo `target/` は deny-all で除外し、`src/target/` 等の正当な source は保持します。
 
 ## Policy の配置
 

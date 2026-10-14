@@ -52,7 +52,7 @@ Docker image tag は展開後の `+` を `_` に変換する（例 `1.2.3+build.
 
 Docker Release（Rust の有無にかかわらず）と Docker project pipeline は新規 Release を draft として作り、最終 image 照会と配布案内の本文更新が成功した時点で公開する。照会・本文更新が失敗した場合は draft のまま元 run を再実行する。
 
-`use_rust=true` の汎用 Release・Docker Release は `rust_release_targets` で通常の Rust CLI / Exporter の配布対象を選ぶ。既定は既存の Linux x64（GNU）。root Cargo package の default features で有効な全 executable を同梱し、library のみ・無効な optional CLI のみの場合は配布 archive を作らない。Tauri の bundle 経路とは独立しており、Python のみの project や Docker project pipeline にこの配布 job は生成しない。
+`use_rust=true` の汎用 Release・Docker Release は `rust_release_targets` で通常の Rust CLI / Exporter の配布対象を選ぶ。既定は既存の Linux x64（GNU）。root Cargo package の default features で有効な全 executable を同梱し、library のみ・無効な optional CLI のみの場合は配布 archive を作らない。Tauri の bundle 経路とは独立しており、Docker project pipeline にこの配布 job は生成しない。
 
 | Rust target                | Native runner                  | Archive                               |
 | -------------------------- | ------------------------------ | ------------------------------------- |
@@ -75,7 +75,7 @@ Docker Release（Rust の有無にかかわらず）と Docker project pipeline 
 "rust": {
   "targets": ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "aarch64-apple-darwin"],
   "smoke_args": ["--help"],
-  "stage_command": ["python", "scripts/package-release.py"]
+  "stage_command": []
 }
 ```
 

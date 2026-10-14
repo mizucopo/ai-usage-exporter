@@ -1,28 +1,9 @@
-# Python
+# CI release helper cache
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual Environment
-.venv/
-venv/
-ENV/
-env/
 
 # Environment/Secrets Variables
 .env
 .secrets
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
 
 # Distribution
 build/
