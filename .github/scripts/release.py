@@ -2,14 +2,18 @@
 """Number main once, then build and publish that exact commit in the same run."""
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
+import zipfile
 from pathlib import Path
 from urllib import error, parse, request
 
@@ -186,6 +190,7 @@ def publication(policy, version, revision=None):
     )
     return {
         "release_tag": tag,
+        **({"rust": rust_config(spec["rust"])} if "rust" in spec else {}),
         "images": images,
         "release_paths": spec["release_paths"],
         "latest_image": spec.get("latest_image"),
@@ -1279,84 +1284,409 @@ def distribution_body(body, assets, images):
     return body + (newline * 2 if body and block else "") + block
 
 
-def rust_asset(git, gh, release, tag, assets):
-    root = Path(git.root)
-    package = tomllib.loads((root / "Cargo.toml").read_text())["package"]["name"]
+RUST_TARGETS = {
+    "x86_64-unknown-linux-gnu": (
+        "ubuntu-latest",
+        "linux-x86_64",
+        "tar.gz",
+        "Linux",
+        "x86_64",
+    ),
+    "x86_64-pc-windows-msvc": (
+        "windows-latest",
+        "windows-x86_64",
+        "zip",
+        "Windows",
+        "x86_64",
+    ),
+    "aarch64-pc-windows-msvc": (
+        "windows-11-arm",
+        "windows-arm64",
+        "zip",
+        "Windows",
+        "aarch64",
+    ),
+    "aarch64-apple-darwin": (
+        "macos-latest",
+        "macos-arm64",
+        "tar.gz",
+        "Darwin",
+        "aarch64",
+    ),
+}
+
+
+def rust_config(spec):
+    targets = spec.get("targets")
+    require(
+        isinstance(targets, list)
+        and targets
+        and all(isinstance(t, str) and t in RUST_TARGETS for t in targets)
+        and len(set(targets)) == len(targets),
+        "Rust distribution requires distinct supported targets",
+    )
+    for field in ("smoke_args", "stage_command"):
+        value = spec.get(field, ["--help"] if field == "smoke_args" else [])
+        require(
+            isinstance(value, list)
+            and all(isinstance(arg, str) and "\0" not in arg for arg in value),
+            f"Invalid Rust {field}",
+        )
+    return {
+        "targets": targets,
+        "smoke_args": spec.get("smoke_args", ["--help"]),
+        "stage_command": spec.get("stage_command", []),
+    }
+
+
+def rust_name(package, tag, target):
+    _, suffix, extension, _, _ = RUST_TARGETS[target]
+    # Keep SemVer metadata literal while preserving safe custom tag separators.
+    return f"{package}-{parse.quote(tag, safe='+')}-{suffix}.{extension}"
+
+
+def rust_package(git):
+    return tomllib.loads((Path(git.root) / "Cargo.toml").read_text(encoding="utf-8"))[
+        "package"
+    ]["name"]
+
+
+def file_sha256(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def rust_archive(archive, stage):
+    files = sorted(path for path in stage.rglob("*") if path.is_file())
+    require(
+        files and not any(path.is_symlink() for path in stage.rglob("*")),
+        "Rust staging must contain regular files without symlinks",
+    )
+    if archive.name.endswith(".zip"):
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for path in files:
+                bundle.write(path, path.relative_to(stage).as_posix())
+    else:
+        with tarfile.open(archive, "w:gz") as bundle:
+            for path in files:
+                bundle.add(path, arcname=path.relative_to(stage).as_posix())
+
+
+def rust_extract(archive, destination):
+    if archive.name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            require(len(set(names)) == len(names), "Duplicate Rust archive members")
+            for name in names:
+                safe_path(name)
+            bundle.extractall(destination)
+    else:
+        with tarfile.open(archive) as bundle:
+            members = bundle.getmembers()
+            require(
+                len({m.name for m in members}) == len(members),
+                "Duplicate Rust archive members",
+            )
+            for member in members:
+                safe_path(member.name)
+                require(member.isfile(), "Rust archive contains a non-regular file")
+            bundle.extractall(destination, filter="data")
+            names = [m.name for m in members]
+    return names
+
+
+def rust_smoke(archive, binaries, args):
+    with tempfile.TemporaryDirectory() as directory:
+        extracted = Path(directory)
+        members = rust_extract(archive, extracted)
+        require(
+            all(name in members for name in binaries),
+            "Rust archive is missing executables",
+        )
+        for name in binaries:
+            try:
+                result = subprocess.run(
+                    [str(extracted / name), *args],
+                    cwd=extracted,
+                    capture_output=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise PreparationError(
+                    f"Rust startup smoke failed: {name}: {exc}"
+                ) from exc
+            require(result.returncode == 0, f"Rust startup smoke failed: {name}")
+
+
+def build_rust_distribution(git, plan, release_sha, target, directory):
+    spec = rust_config(plan["rust"])
+    require(target in spec["targets"], "Rust target is not selected")
+    _, _, _, system, architecture = RUST_TARGETS[target]
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+    require(
+        platform.system() == system and machine == architecture,
+        "Rust distribution requires a native runner for build and startup smoke",
+    )
+    package = rust_package(git)
     metadata = json.loads(
         run("cargo", "metadata", "--no-deps", "--format-version=1", cwd=git.root)
     )
-    targets = next(p["targets"] for p in metadata["packages"] if p["name"] == package)
-    if not any("bin" in target["kind"] for target in targets):
-        return  # A library has no executable to distribute.
-    # Keep SemVer metadata literal while preserving safe custom tag separators.
-    name = f"{package}-{parse.quote(tag, safe='+')}-linux-x86_64.tar.gz"
-    if any(
-        a["name"] == name and a.get("state") == "uploaded" and a.get("size", 0) > 0
-        for a in assets
-    ):
-        return
-    build = run(
-        "cargo",
-        "build",
-        "--release",
-        "--locked",
-        "--package",
-        package,
-        "--bins",
-        "--target",
-        "x86_64-unknown-linux-gnu",
-        "--message-format=json",
-        cwd=git.root,
-    )
+    entry = next(p for p in metadata["packages"] if p["name"] == package)
+    targets = [t for t in entry["targets"] if "bin" in t["kind"]]
     binaries = []
-    for line in build.decode().splitlines():
-        artifact = json.loads(line)
-        if (
-            artifact.get("reason") == "compiler-artifact"
-            and "bin" in artifact["target"]["kind"]
-            and artifact.get("executable")
-        ):
-            binaries.append(root / artifact["executable"])
-    if not binaries:
-        return  # All executable targets may require disabled optional features.
-    require(release["draft"], "Published Rust distribution asset is missing")
-    with tempfile.TemporaryDirectory() as directory:
-        archive = Path(directory) / name
-        with tarfile.open(archive, "w:gz") as bundle:
-            for binary in binaries:
-                bundle.add(binary, arcname=binary.name)
-        incomplete = [asset for asset in assets if asset["name"] == name]
-        require(
-            all(type(a.get("id")) is int and a["id"] > 0 for a in incomplete),
-            "Invalid release asset ID",
-        )
-        upload_url = release.get("upload_url")
-        require(
-            isinstance(upload_url, str) and upload_url, "Invalid release upload URL"
-        )
-        upload_url = upload_url.split("{")[0]
-        for asset in incomplete:
-            gh.repo(f"/releases/assets/{asset['id']}", method="DELETE")
-        run(
-            "gh",
-            "api",
-            "--method",
-            "POST",
-            f"{upload_url}?name={parse.quote(name, safe='')}",
-            "-H",
-            "Content-Type: application/gzip",
-            "--input",
-            str(archive),
+    if targets:
+        # The old quality gate created an optional lock before the locked build.
+        if not (Path(git.root) / "Cargo.lock").exists():
+            run("cargo", "generate-lockfile", cwd=git.root)
+        build = run(
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--package",
+            package,
+            "--bins",
+            "--target",
+            target,
+            "--message-format=json",
             cwd=git.root,
         )
-    uploaded = gh.pages(f"/releases/{release['id']}/assets")
+        artifacts = [json.loads(line) for line in build.decode().splitlines()]
+        binaries = [
+            Path(git.root) / a["executable"]
+            for a in artifacts
+            if a.get("reason") == "compiler-artifact"
+            and a.get("package_id") == entry["id"]
+            and "bin" in a["target"]["kind"]
+            and a.get("executable")
+        ]
+        suffix = ".exe" if system == "Windows" else ""
+        declared = {t["name"] + suffix for t in targets}
+        mandatory = {
+            t["name"] + suffix for t in targets if not t.get("required-features")
+        }
+        produced = {p.name for p in binaries}
+        # Cargo's package build, not workspace-wide metadata, decides optional bins.
+        require(
+            mandatory <= produced <= declared
+            and len(binaries) == len(produced)
+            and all(p.is_file() and p.stat().st_size > 0 for p in binaries),
+            "Cargo did not produce all selected Rust executables",
+        )
+    destination = Path(directory) / target
+    destination.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "release_sha": release_sha,
+        "release_tag": plan["release_tag"],
+        "target": target,
+        "package": package,
+        "binaries": [p.name for p in binaries],
+        "archive": None,
+        "sha256": None,
+        "smoke": "native",
+    }
+    if binaries:
+        archive = destination / rust_name(package, plan["release_tag"], target)
+        with tempfile.TemporaryDirectory() as stage_directory:
+            stage = Path(stage_directory)
+            for binary in binaries:
+                shutil.copy2(binary, stage / binary.name)
+            if spec["stage_command"]:
+                run(
+                    *spec["stage_command"],
+                    cwd=git.root,
+                    env={
+                        **os.environ,
+                        "RUST_RELEASE_STAGE_DIR": str(stage),
+                        "RUST_RELEASE_TARGET": target,
+                        "RUST_RELEASE_TAG": plan["release_tag"],
+                    },
+                )
+            rust_archive(archive, stage)
+        rust_smoke(archive, manifest["binaries"], spec["smoke_args"])
+        digest = file_sha256(archive)
+        (destination / (archive.name + ".sha256")).write_bytes(
+            f"{digest}  {archive.name}\n".encode()
+        )
+        manifest.update(archive=archive.name, sha256=digest)
+    (destination / "manifest.json").write_bytes(canonical(manifest))
+
+
+def rust_deliverables(git, plan, release_sha, directory):
+    package = rust_package(git)
+    deliverables = []
+    binary_names = None
+    for target in rust_config(plan["rust"])["targets"]:
+        root = Path(directory) / ("rust-release-" + target)
+        manifest = json.loads((root / "manifest.json").read_text())
+        require(
+            all(
+                manifest.get(key) == value
+                for key, value in {
+                    "release_sha": release_sha,
+                    "release_tag": plan["release_tag"],
+                    "target": target,
+                    "package": package,
+                    "smoke": "native",
+                }.items()
+            ),
+            "Rust artifact identity or native smoke differs from publication plan",
+        )
+        names = manifest.get("binaries")
+        require(
+            isinstance(names, list)
+            and all(isinstance(n, str) for n in names)
+            and len(set(names)) == len(names),
+            "Invalid Rust executable manifest",
+        )
+        for name in names:
+            safe_path(name)
+            require("/" not in name, "Invalid Rust executable name")
+            if "windows" in target:
+                require(
+                    name.endswith(".exe"), "Windows Rust executable must end in .exe"
+                )
+        normalized = (
+            {n.removesuffix(".exe") for n in names}
+            if "windows" in target
+            else set(names)
+        )
+        if binary_names is None:
+            binary_names = normalized
+        require(
+            normalized == binary_names, "Rust executable sets differ between targets"
+        )
+        if not names:
+            require(
+                manifest.get("archive") is None and manifest.get("sha256") is None,
+                "Library-only Rust artifact must not contain an archive",
+            )
+            continue
+        name = rust_name(package, plan["release_tag"], target)
+        require(
+            manifest.get("archive") == name,
+            "Rust archive name differs from publication plan",
+        )
+        archive = root / name
+        digest = file_sha256(archive)
+        require(
+            manifest.get("sha256") == digest,
+            "Rust archive checksum differs from manifest",
+        )
+        require(
+            (root / (name + ".sha256")).read_text(encoding="utf-8")
+            == f"{digest}  {name}\n",
+            "Rust checksum sidecar differs from archive",
+        )
+        with tempfile.TemporaryDirectory() as extracted_directory:
+            members = rust_extract(archive, Path(extracted_directory))
+            require(
+                all(n in members for n in names), "Rust archive is missing executables"
+            )
+        deliverables.append(archive)
+    return deliverables
+
+
+def completed_rust_asset(assets, name):
+    matches = [a for a in assets if a["name"] == name]
+    complete = [
+        a for a in matches if a.get("state") == "uploaded" and a.get("size", 0) > 0
+    ]
     require(
-        any(
-            a["name"] == name and a.get("state") == "uploaded" and a.get("size", 0) > 0
-            for a in uploaded
-        ),
-        "Rust distribution upload is incomplete",
+        len(complete) <= 1 and (not complete or len(matches) == 1),
+        f"Ambiguous Rust distribution asset: {name}",
     )
+    return complete[0] if complete else None
+
+
+def read_rust_asset(git, gh, asset):
+    require(
+        type(asset.get("id")) is int and asset["id"] > 0, "Invalid release asset ID"
+    )
+    return run(
+        "gh",
+        "api",
+        f"/repos/{gh.repository}/releases/assets/{asset['id']}",
+        "-H",
+        "Accept: application/octet-stream",
+        cwd=git.root,
+    )
+
+
+def upload_rust_asset(git, gh, release, assets, path):
+    complete = completed_rust_asset(assets, path.name)
+    if complete:
+        return complete
+    require(
+        release["draft"], f"Published Rust distribution asset is missing: {path.name}"
+    )
+    incomplete = [a for a in assets if a["name"] == path.name]
+    require(
+        all(type(a.get("id")) is int and a["id"] > 0 for a in incomplete),
+        "Invalid release asset ID",
+    )
+    upload_url = release.get("upload_url")
+    require(isinstance(upload_url, str) and upload_url, "Invalid release upload URL")
+    for asset in incomplete:
+        gh.repo(f"/releases/assets/{asset['id']}", method="DELETE")
+    content_type = "application/octet-stream"
+    if path.name.endswith(".zip"):
+        content_type = "application/zip"
+    elif path.name.endswith(".tar.gz"):
+        content_type = "application/gzip"
+    run(
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"{upload_url.split('{')[0]}?name={parse.quote(path.name, safe='')}",
+        "-H",
+        "Content-Type: " + content_type,
+        "--input",
+        str(path),
+        cwd=git.root,
+    )
+    uploaded = completed_rust_asset(
+        gh.pages(f"/releases/{release['id']}/assets"), path.name
+    )
+    require(uploaded, f"Rust distribution upload is incomplete: {path.name}")
+    return uploaded
+
+
+def rust_asset(git, gh, release, plan, assets):
+    archives = rust_deliverables(
+        git, plan, git.text("rev-parse", "HEAD"), os.environ["RUST_RELEASE_DIR"]
+    )
+    # Check every target before any writes. Completed releases remain immutable.
+    if not release["draft"]:
+        for archive in archives:
+            for name in (archive.name, archive.name + ".sha256"):
+                require(
+                    completed_rust_asset(assets, name),
+                    f"Published Rust distribution asset is missing: {name}",
+                )
+    for archive in archives:
+        uploaded = upload_rust_asset(git, gh, release, assets, archive)
+        # A rerun must checksum the retained bytes, not a newly rebuilt archive.
+        digest = uploaded.get("digest", "")
+        if not isinstance(digest, str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", digest
+        ):
+            digest = (
+                "sha256:"
+                + hashlib.sha256(read_rust_asset(git, gh, uploaded)).hexdigest()
+            )
+        expected = f"{digest.removeprefix('sha256:')}  {archive.name}\n".encode()
+        with tempfile.TemporaryDirectory() as directory:
+            checksum = Path(directory) / (archive.name + ".sha256")
+            checksum.write_bytes(expected)
+            sidecar = upload_rust_asset(git, gh, release, assets, checksum)
+        require(
+            read_rust_asset(git, gh, sidecar) == expected,
+            f"Published Rust checksum differs from archive: {archive.name}",
+        )
 
 
 def distribution(git, gh, plan):
@@ -1383,7 +1713,7 @@ def distribution(git, gh, plan):
     )
     assets = gh.pages(f"/releases/{release['id']}/assets")
     if os.environ.get("BUILD_RUST_BINARY") == "true":
-        rust_asset(git, gh, release, tag, assets)
+        rust_asset(git, gh, release, plan, assets)
         assets = gh.pages(f"/releases/{release['id']}/assets")
     for image in plan["images"]:
         require(
@@ -1440,6 +1770,8 @@ def main():
             "image-state",
             "classification",
             "distribution",
+            "rust-matrix",
+            "rust-build",
             "create",
         ],
     )
@@ -1461,6 +1793,28 @@ def main():
             values = {"version": plan["generated_version"]}
         elif args.action == "create":
             values = {"release_id": create_release(gh, plan["publication"])}
+        elif args.action == "rust-matrix":
+            values = {
+                "rust_matrix": json.dumps(
+                    [
+                        {"target": target, "runner": RUST_TARGETS[target][0]}
+                        for target in rust_config(plan["publication"]["rust"])[
+                            "targets"
+                        ]
+                    ]
+                )
+            }
+        elif args.action == "rust-build":
+            target = os.environ["RUST_RELEASE_TARGET"]
+            run("rustup", "target", "add", target, cwd=git.root)
+            build_rust_distribution(
+                git,
+                plan["publication"],
+                os.environ["RELEASE_SHA"],
+                target,
+                os.environ["RUST_RELEASE_DIR"],
+            )
+            values = {}
         elif args.action == "distribution":
             distribution(git, gh, plan["publication"])
             values = {}

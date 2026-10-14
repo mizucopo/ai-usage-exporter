@@ -66,7 +66,7 @@ impl CodexClient {
             .command
             .split_first()
             .ok_or(CodexError("Codex command is empty"))?;
-        let mut child = Command::new(program)
+        let mut child = Command::new(executable(program))
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -114,6 +114,59 @@ impl CodexClient {
         }
         result
     }
+}
+
+fn executable(program: &str) -> std::path::PathBuf {
+    #[cfg(windows)]
+    if program.eq_ignore_ascii_case("codex")
+        && let Some(path) = std::env::var_os("PATH")
+            .and_then(|path| windows_codex_executable(std::env::split_paths(&path)))
+    {
+        return path;
+    }
+    program.into()
+}
+
+#[cfg(windows)]
+fn windows_codex_executable(
+    directories: impl IntoIterator<Item = std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    // npm's cmd/Node wrappers spawn a native grandchild. Launch that executable
+    // directly so kill_on_drop and cleanup own the actual app-server process.
+    let platform = match std::env::consts::ARCH {
+        "x86_64" => Some(("codex-win32-x64", "x86_64-pc-windows-msvc")),
+        "aarch64" => Some(("codex-win32-arm64", "aarch64-pc-windows-msvc")),
+        _ => None,
+    };
+    for directory in directories {
+        let native = directory.join("codex.exe");
+        if native.is_file() {
+            return Some(native);
+        }
+        let Some((package, target)) = platform else {
+            continue;
+        };
+        if !directory.join("codex.cmd").is_file() && !directory.join("codex.ps1").is_file() {
+            continue;
+        }
+        let scope = directory.join("node_modules").join("@openai");
+        let codex = scope.join("codex");
+        for vendor in [
+            codex
+                .join("node_modules")
+                .join("@openai")
+                .join(package)
+                .join("vendor"),
+            scope.join(package).join("vendor"),
+            codex.join("vendor"),
+        ] {
+            let native = vendor.join(target).join("bin").join("codex.exe");
+            if native.is_file() {
+                return Some(native);
+            }
+        }
+    }
+    None
 }
 
 async fn send(stream: &mut ChildStdin, message: Value) -> Result<(), CodexError> {
@@ -167,5 +220,67 @@ async fn receive(
             return Err(CodexError("Codex response is too large"));
         }
         buffered.extend_from_slice(&chunk[..count]);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    fn platform() -> (&'static str, &'static str) {
+        match std::env::consts::ARCH {
+            "aarch64" => ("codex-win32-arm64", "aarch64-pc-windows-msvc"),
+            _ => ("codex-win32-x64", "x86_64-pc-windows-msvc"),
+        }
+    }
+
+    #[test]
+    fn resolves_native_executables_in_path_order_without_a_shell() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first path & literal");
+        let second = directory.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let native = first.join("codex.exe");
+        std::fs::write(&native, b"native mock").unwrap();
+        std::fs::write(second.join("codex.exe"), b"other mock").unwrap();
+        assert_eq!(windows_codex_executable([first, second]), Some(native));
+        assert_eq!(
+            executable("explicit-native.exe"),
+            std::path::PathBuf::from("explicit-native.exe")
+        );
+    }
+
+    #[test]
+    fn resolves_npm_nested_hoisted_and_legacy_bundled_binaries() {
+        let (package, target) = platform();
+        for layout in ["nested", "hoisted", "bundled"] {
+            let directory = tempfile::tempdir().unwrap();
+            let prefix = directory.path().join("npm prefix & literal");
+            std::fs::create_dir_all(&prefix).unwrap();
+            std::fs::write(prefix.join("codex.cmd"), b"must never execute this shim").unwrap();
+            let scope = prefix.join("node_modules").join("@openai");
+            let vendor = match layout {
+                "nested" => scope
+                    .join("codex")
+                    .join("node_modules")
+                    .join("@openai")
+                    .join(package)
+                    .join("vendor"),
+                "hoisted" => scope.join(package).join("vendor"),
+                _ => scope.join("codex").join("vendor"),
+            };
+            let native = vendor.join(target).join("bin").join("codex.exe");
+            std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+            std::fs::write(&native, b"native mock").unwrap();
+            assert_eq!(windows_codex_executable([prefix]), Some(native), "{layout}");
+        }
+    }
+
+    #[test]
+    fn absent_native_dependency_does_not_launch_an_npm_wrapper() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("codex.cmd"), b"unused shim").unwrap();
+        assert_eq!(windows_codex_executable([directory.path().into()]), None);
     }
 }

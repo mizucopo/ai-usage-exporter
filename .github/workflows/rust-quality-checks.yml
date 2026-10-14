@@ -8,6 +8,66 @@ permissions:
   contents: read
 
 jobs:
+  distribution-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read configured native targets
+        id: targets
+        run: |
+          python3 - <<'PY'
+          import json, os, runpy
+          from pathlib import Path
+          release = runpy.run_path('.github/scripts/release.py')
+          policy = json.loads(Path('.github/release.json').read_text())
+          targets = release['rust_config'](policy['publication']['rust'])['targets']
+          matrix = [{'target': target, 'runner': release['RUST_TARGETS'][target][0]} for target in targets]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps(matrix) + '\n')
+          PY
+
+  native-distribution:
+    needs: distribution-targets
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.distribution-targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python for distribution checks
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Run additional native quality gates
+        if: matrix.target != 'x86_64-unknown-linux-gnu'
+        timeout-minutes: 15
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+      - name: Verify archive, checksum and packaged exporter with mock Codex
+        timeout-minutes: 15
+        env:
+          DISTRIBUTION_TARGET: ${{ matrix.target }}
+          DISTRIBUTION_OUTPUT: ${{ runner.temp }}/native-distribution
+        run: python -I tests/release_smoke.py --target "$DISTRIBUTION_TARGET" --output "$DISTRIBUTION_OUTPUT"
+      - name: Retain verified distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ format('native-distribution-{0}', matrix.target) }}
+          path: ${{ runner.temp }}/native-distribution/${{ matrix.target }}
+          if-no-files-found: error
+
   rust-quality-checks:
     runs-on: ubuntu-latest
     steps:

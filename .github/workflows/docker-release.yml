@@ -24,6 +24,7 @@ jobs:
       publish: ${{ steps.prepare.outputs.publish || 'false' }}
       release_sha: ${{ steps.prepare.outputs.release_sha }}
       release_tag: ${{ steps.prepare.outputs.release_tag }}
+      rust_matrix: ${{ steps.rust-matrix.outputs.rust_matrix }}
       version: ${{ steps.prepare.outputs.version }}
     steps:
       - name: Validate release branch
@@ -50,8 +51,68 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: python3 -I .github/scripts/release.py prepare
 
-  release:
+      - name: Checkout numbering commit for Rust targets
+        if: steps.prepare.outputs.publish == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.prepare.outputs.release_sha }}
+          fetch-depth: 0
+      - name: Read Rust targets from numbering commit
+        id: rust-matrix
+        if: steps.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.prepare.outputs.release_sha }}
+        run: python3 -I .github/scripts/release.py rust-matrix
+
+  rust-builds:
     needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.rust_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RUST_RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout numbering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+      - name: Set up Python for Rust packaging
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Build, archive and smoke Rust distribution
+        env:
+          RUST_RELEASE_DIR: ${{ runner.temp }}/rust-release
+          GH_TOKEN: ${{ github.token }}
+        run: python -I .github/scripts/release.py rust-build
+      - name: Verify packaged exporter with mock Codex
+        env:
+          RUST_RELEASE_DIR: ${{ runner.temp }}/rust-release
+        run: python -I tests/release_smoke.py --target "$RUST_RELEASE_TARGET" --output "$RUST_RELEASE_DIR" --verify-existing
+      - name: Retain verified Rust distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ format('rust-release-{0}', matrix.target) }}
+          path: ${{ runner.temp }}/rust-release/${{ matrix.target }}
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    needs: [prepare, rust-builds]
     if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     outputs:
@@ -192,6 +253,15 @@ jobs:
                 echo "::error::GitHub Release $TAG returned invalid release metadata."
                 exit 1
               fi
+              if [ "$release_is_draft" = "false" ]; then
+                if ! planned_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "${RELEASE_PLAN_OUTPUT:-}")" \
+                  || ! jq -e --argjson prerelease "$planned_prerelease" \
+                    '(.prerelease | type == "boolean") and .prerelease == $prerelease' \
+                    "$RELEASE_RESPONSE" > /dev/null; then
+                  echo "::error::Published GitHub Release classification differs from publication plan."
+                  exit 1
+                fi
+              fi
             fi
           fi
 
@@ -311,12 +381,18 @@ jobs:
           RELEASE_DRAFT: "true"
         run: python3 -I .github/scripts/release.py create
 
+      - name: Download verified Rust distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rust-release-*
+          path: ${{ runner.temp }}/rust-release
       - name: Add release downloads
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.create-release.outputs.release_id || steps.release-state.outputs.release_id }}
 
           BUILD_RUST_BINARY: "true"
+          RUST_RELEASE_DIR: ${{ runner.temp }}/rust-release
         run: python3 -I .github/scripts/release.py distribution
 
   promote-latest:

@@ -1,4 +1,4 @@
-_commit: 6ffea39
+_commit: 6d6db9a3ac9de4fb404e6b89b4e5885ae2c14ad9
 _src_path: gh:mizucopo/repo-template
 author_email: mizu.copo@gmail.com
 author_name: みず
@@ -14,6 +14,11 @@ dockerfile_path: Dockerfile
 project_description: AI usage exporter
 project_name: ai-usage-exporter
 project_version: 0.3.1
+rust_release_targets:
+- x86_64-unknown-linux-gnu
+- x86_64-pc-windows-msvc
+- aarch64-pc-windows-msvc
+- aarch64-apple-darwin
 rust_version: stable
 use_aws_ecr: false
 use_chrome_extension: false

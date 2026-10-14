@@ -2,6 +2,61 @@
 
 Codex の5時間・週間の利用制限について、残量とリセットまでの時間を Prometheus に公開する Rust のカスタムエクスポーターです。単一の ChatGPT アカウントを対象に、Codex CLI の `account/rateLimits/read` で取得した情報を `/metrics` から公開します。
 
+## バイナリで起動
+
+[GitHub Releases](https://github.com/mizucopo/ai-usage-exporter/releases) の Downloads から、自分の OS / CPU に合う archive と同名の `.sha256` を取得します。次の公開から、同じ version / tag に以下の4種類を添付します。過去の Release にない添付ファイルは追加しません。
+
+| OS / CPU | Archive | 実行ファイル |
+| --- | --- | --- |
+| Linux x86_64 (GNU) | `ai-usage-exporter-<tag>-linux-x86_64.tar.gz` | `ai-usage-exporter` |
+| Windows x86_64 / x64 | `ai-usage-exporter-<tag>-windows-x86_64.zip` | `ai-usage-exporter.exe` |
+| Windows ARM64 | `ai-usage-exporter-<tag>-windows-arm64.zip` | `ai-usage-exporter.exe` |
+| macOS Apple Silicon / ARM64 | `ai-usage-exporter-<tag>-macos-arm64.tar.gz` | `ai-usage-exporter` |
+
+Windows ZIP は exporter の `.exe`、Linux / macOS の tar.gz は実行ファイルを archive 直下に含みます。Codex CLI は同梱しません。[公式の導入手順](https://github.com/openai/codex#installation)に従って同じ OS / CPU の Codex CLI を別途用意し、`codex --version` が通る PATH に置きます。Windows は native `codex.exe` または公式 npm package の `codex.cmd` と、その package に含まれる native executable に対応します。任意の `.cmd` / PowerShell wrapper は使えません。公式 native archive を使う場合は、実行ファイルを `codex.exe` にリネームして PATH に配置します。
+
+exporter は scrape 時に Codex の `app-server` を子プロセスとして起動し、認証の保存方式に `file` を指定します。CLI と exporter を同じユーザー・同じ書き込み可能な `CODEX_HOME` で実行し、開始前に Codex CLI でログインしてください。既に file 方式でログイン済みなら、その `CODEX_HOME` を使えます。keyring だけに認証が保存されている場合は、運用者が CLI の file 方式でログインを用意する必要があります。exporter 自身はログインを行いません。
+
+Windows PowerShell（`<tag>` を Downloads の tag に置換）:
+
+```powershell
+$archive = 'ai-usage-exporter-<tag>-windows-x86_64.zip' # ARM64 は windows-arm64.zip
+$expected = (Get-Content "$archive.sha256").Split(' ')[0]
+if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+    throw 'SHA-256 mismatch'
+}
+Expand-Archive $archive -DestinationPath .\ai-usage-exporter
+$env:CODEX_HOME = Join-Path $env:USERPROFILE '.codex-exporter'
+# 初回のみ、表示された案内に従ってログイン
+codex -c 'cli_auth_credentials_store="file"' login --device-auth
+$env:AI_USAGE_EXPORTER_HOST = '127.0.0.1'
+$env:AI_USAGE_EXPORTER_PORT = '9173'
+.\ai-usage-exporter\ai-usage-exporter.exe --help
+.\ai-usage-exporter\ai-usage-exporter.exe
+# 別の PowerShell から: (Invoke-WebRequest http://127.0.0.1:9173/metrics).Content
+```
+
+macOS ARM64（Linux は archive 名と `sha256sum -c` に置換）:
+
+```bash
+archive='ai-usage-exporter-<tag>-macos-arm64.tar.gz'
+shasum -a 256 -c "$archive.sha256"
+mkdir -p ai-usage-exporter
+tar -xzf "$archive" -C ai-usage-exporter
+export CODEX_HOME="$HOME/.codex-exporter"
+# 初回のみ、表示された案内に従ってログイン
+codex -c 'cli_auth_credentials_store="file"' login --device-auth
+export AI_USAGE_EXPORTER_HOST=127.0.0.1
+export AI_USAGE_EXPORTER_PORT=9173
+./ai-usage-exporter/ai-usage-exporter --help
+./ai-usage-exporter/ai-usage-exporter
+# 別の terminal から: curl http://127.0.0.1:9173/metrics
+```
+
+停止は起動した terminal で `Ctrl+C`（Windows は `Ctrl+Break` も対応）を使います。macOS / Linux は `SIGTERM` でも停止できます。実行中の scrape は取得タイムアウトまで待って子プロセスを回収し、終了します。設定の既定値・キャッシュ・Prometheus の仕様は Docker と共通で、下の環境変数表を参照してください。バイナリの署名・macOS notarization は提供していません。
+
+PR CI は4対象の native runner で、mock CLI による通信・`/metrics`・キャッシュ・停止、および配布 archive の checksum・展開・起動を検証します。これは実アカウント・一般利用者の実機での確認とは別です。実認証・課金 API はテストで使用しません。
+
 ## Docker で起動
 
 イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成し、Python runtime・uv・venv・開発用依存関係を含めません。
