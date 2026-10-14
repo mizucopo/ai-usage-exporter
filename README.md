@@ -140,7 +140,7 @@ cargo run --locked --bin ai-usage-exporter
 
 ローカル実行には `PATH` 上の Codex CLI とログイン済みの `CODEX_HOME` が必要です。実装は `src/`、テストは `tests/` に配置します。
 
-Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、`.dockerignore` のアプリケーション入力の許可項目は、このリポジトリで管理します。それ以外の生成ファイルは Copier の標準出力を採用しています。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
+Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、製品向けの ignore 設定・文書は、このリポジトリで管理します。共通 workflow・release controller は Copier の標準出力を採用し、生成ファイルの製品固有差分は `copier update` の three-way merge で維持・確認します。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
 
 ## Docker Hub への公開
 
