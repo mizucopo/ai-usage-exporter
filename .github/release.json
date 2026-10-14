@@ -17,6 +17,16 @@
     "github_release": true,
 
     "release_paths": ["Cargo.toml", "Dockerfile"],
+    "rust": {
+      "targets": [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin"
+      ],
+      "smoke_args": ["--help"],
+      "stage_command": []
+    },
     "latest_image": "extended",
     "images": [
       {
