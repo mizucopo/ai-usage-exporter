@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from pathlib import Path
@@ -913,6 +914,25 @@ def image_digest(image):
     return "|".join(sorted(set(digests)))
 
 
+def verify_published_image(image):
+    attempts, interval = 6, 5
+    for attempt in range(1, attempts + 1):
+        digest = image_digest(image)
+        if digest is not None:
+            return digest
+        if attempt < attempts:
+            print(
+                f"Published image is not visible ({attempt}/{attempts}); "
+                f"retrying in {interval} seconds",
+                file=sys.stderr,
+            )
+            time.sleep(interval)
+    raise PreparationError(
+        f"Published image is still missing after {attempts} attempts "
+        f"with a {interval}-second retry interval"
+    )
+
+
 def remote_collisions(gh, plan):
     tag = parse.quote(plan["release_tag"], safe="")
     # Authenticated listing includes drafts; the tag endpoint alone does not.
@@ -1768,6 +1788,7 @@ def main():
             "plan",
             "latest",
             "image-state",
+            "image-verify",
             "classification",
             "distribution",
             "rust-matrix",
@@ -1818,14 +1839,19 @@ def main():
         elif args.action == "distribution":
             distribution(git, gh, plan["publication"])
             values = {}
-        elif args.action == "image-state":
+        elif args.action in {"image-state", "image-verify"}:
             require(
                 len(plan["publication"]["images"]) == 1,
-                "image-state requires one image",
+                f"{args.action} requires one image",
             )
             image = plan["publication"]["images"][0]
+            digest = (
+                verify_published_image(image)
+                if args.action == "image-verify"
+                else image_digest(image)
+            )
             values = {
-                "version_exists": str(image_digest(image) is not None).lower(),
+                "version_exists": str(digest is not None).lower(),
                 "image_tag": image["tag"],
             }
         else:

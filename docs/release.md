@@ -46,6 +46,10 @@ Release の分類は共通公開計画で採番済み VERSION と方式から決
 
 Docker image tag は展開後の `+` を `_` に変換する（例 `1.2.3+build.1` → `1.2.3_build.1`）。SemVer に `_` は使えないため prerelease の `-` と衝突せず、Git version・tag・Release 名は元の値を保持する。有効な既存 image tag は変わらない。変換後にも tag の長さ・形式・使用済み状態・所有者を検証する。
 
+Docker Release の公開後確認は `image-verify` で同じ immutable tag を最大 6 回照会し、不在の間だけ 5 秒間隔で待つ（待機は最大 5 回・計 25 秒、HTTP request の timeout は各 30 秒）。Docker Hub の tag endpoint の 404 と ECR の ImageNotFoundException が待機対象。repository 自体の 404、401/403、429、5xx、通信失敗・timeout、不正 digest は再試行せず失敗する。上限到達時は試行回数と間隔を error に示し、GitHub Release の作成・公開と latest 昇格へ進まない。途中ログには試行回数と待機間隔だけを載せ、認証 token や応答本文は載せない。
+
+採番時の未使用判定と公開前の `image-state` は単発照会のまま維持する。確認中に image を再 build/push・上書きしない。部分公開後は元 run を再実行し、同じ commit/tag の所有権を検証した既存 image と完成済み native assets を再利用して、不足工程だけを続ける。公開直後の不在は反映遅延の可能性があるが、再試行成功だけで原因を断定しない。
+
 ## 配布案内
 
 汎用 Release・Docker Release・Docker project pipeline は、添付済み asset と公開設定の image を本文の管理ブロックに案内する。既存のリリースノート・手書き本文は保持し、再実行では同じブロックを更新する。Docker Hub はリンクと実際の version tag の PULL コマンドを載せ、ECR は ECR の PULL コマンドを載せる。公開先の照会失敗・未提供 image は公開前に停止する。
