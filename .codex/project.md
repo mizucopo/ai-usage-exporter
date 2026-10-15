@@ -11,4 +11,4 @@ credentials, contact the account service, or alter production environments.
 
 Preserve `/metrics`, environment variables, quota parsing, cache invalidation,
 and Prometheus names, labels and meanings. Performance measurement and
-benchmarks are outside this migration's requested scope.
+benchmarks are out of scope.

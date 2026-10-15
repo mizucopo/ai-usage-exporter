@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib import request
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def require(condition, message):

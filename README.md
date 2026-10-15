@@ -140,12 +140,10 @@ cargo run --locked --bin ai-usage-exporter
 
 ローカル実行には `PATH` 上の Codex CLI とログイン済みの `CODEX_HOME` が必要です。実装は `src/`、テストは `tests/` に配置します。
 
-Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、製品向けの ignore 設定・文書は、このリポジトリで管理します。共通 workflow・release controller は Copier の標準出力を採用し、生成ファイルの製品固有差分は `copier update` の three-way merge で維持・確認します。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
+Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、`.dockerignore` のアプリケーション入力の許可項目は、このリポジトリで管理します。それ以外の生成ファイルは Copier の標準出力を採用しています。Docker の `COPY` 対象を追加するときは `.dockerignore` の許可項目も更新してください。
 
 ## Docker Hub への公開
 
 公開先は `mizucopo/ai-usage-exporter`、ログイン名は `mizucopo` です。GitHub Actions の repository secret `DOCKERHUB_TOKEN` に、このイメージへの push 権限を持つトークンを設定してください。
 
 PR 全体の差分を分類し、公開する PR には `release:patch`・`release:minor`・`release:major` のラベルを一つ付けます。採番元は `Cargo.toml` の `package.version` で、GitHub Actions が squash merge 後に採番し、Docker イメージ、Git tag、GitHub Release を公開します。PR では Rust 品質チェックと Docker ビルドを実行します。詳細は [CONTRIBUTING.md](CONTRIBUTING.md) と [docs/release.md](docs/release.md) を参照してください。
-
-今回の Rust 移植では性能計測・ベンチマークを行っていません。メモリ、イメージサイズ、起動・応答時間の改善量は未確認です。
