@@ -2,6 +2,7 @@
 """Number main once, then build and publish that exact commit in the same run."""
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -824,23 +825,56 @@ def publication_at(git, commit, policy=None):
     return publication(policy, version, revision)
 
 
+class NoRegistryRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
+        return None
+
+
+def registry_open(req):
+    # Credentials and scoped tokens must stay on their fixed HTTPS endpoints.
+    return request.build_opener(NoRegistryRedirect()).open(req, timeout=30)
+
+
 def registry_json(url, headers=None, payload=None, missing=False):
     headers = dict(headers or {})
     data = canonical(payload) if payload is not None else None
     if data is not None:
         headers["Content-Type"] = "application/json"
     try:
-        with request.urlopen(
-            request.Request(url, data=data, headers=headers), timeout=30
+        with registry_open(
+            request.Request(url, data=data, headers=headers)
         ) as response:
             return json.load(response)
     except error.HTTPError as exc:
+        exc.close()
         if missing and exc.code == 404:
             return None
         raise PreparationError(
             f"Registry lookup failed: HTTP {exc.code} at {url}"
         ) from exc
-    except (error.URLError, ValueError) as exc:
+    except (error.URLError, ValueError, OSError) as exc:
+        raise PreparationError(f"Registry lookup failed at {url}") from exc
+
+
+def registry_head_digest(url, headers):
+    try:
+        with registry_open(
+            request.Request(url, headers=headers, method="HEAD")
+        ) as response:
+            require(
+                response.status == 200,
+                f"Registry lookup failed: HTTP {response.status} at {url}",
+            )
+            # Only HTTP 404 is absent; a missing digest must fail validation.
+            return response.headers.get("Docker-Content-Digest") or ""
+    except error.HTTPError as exc:
+        exc.close()
+        if exc.code == 404:
+            return None
+        raise PreparationError(
+            f"Registry lookup failed: HTTP {exc.code} at {url}"
+        ) from exc
+    except (error.URLError, ValueError, OSError) as exc:
         raise PreparationError(f"Registry lookup failed at {url}") from exc
 
 
@@ -872,8 +906,11 @@ def image_digest(image):
         require(len(rows) == 1, "ECR returned ambiguous image state")
         digests = [rows[0].get("imageDigest")]
     else:
-        headers = {}
+        headers, credentials = {}, {}
         if os.environ.get("DOCKERHUB_TOKEN"):
+            require(
+                os.environ.get("DOCKERHUB_USERNAME"), "DOCKERHUB_USERNAME is required"
+            )
             auth = registry_json(
                 "https://hub.docker.com/v2/auth/token",
                 payload={
@@ -881,28 +918,61 @@ def image_digest(image):
                     "secret": os.environ["DOCKERHUB_TOKEN"],
                 },
             )
-            token = auth.get("access_token")
+            token = auth.get("access_token") if isinstance(auth, dict) else None
             require(
                 isinstance(token, str) and token,
                 "Docker Hub did not return an access token",
             )
             headers["Authorization"] = "Bearer " + token
+            basic = (
+                f"{os.environ['DOCKERHUB_USERNAME']}:{os.environ['DOCKERHUB_TOKEN']}"
+            )
+            credentials["Authorization"] = (
+                "Basic " + base64.b64encode(basic.encode()).decode()
+            )
         root = f"https://hub.docker.com/v2/repositories/{image['repository']}/"
-        registry_json(
-            root, headers
+        require(
+            isinstance(registry_json(root, headers), dict),
+            "Docker Hub returned invalid repository metadata",
         )  # A private/unknown repository is not an absent tag.
-        data = registry_json(
-            root + "tags/" + parse.quote(image["tag"], safe="") + "/",
-            headers,
-            missing=True,
+        # Hub tag metadata may lag behind an image that the registry already serves.
+        auth = registry_json(
+            "https://auth.docker.io/token?"
+            + parse.urlencode(
+                {
+                    "service": "registry.docker.io",
+                    "scope": f"repository:{image['repository']}:pull",
+                }
+            ),
+            credentials,
         )
-        if data is None:
+        token = (
+            (auth.get("token") or auth.get("access_token"))
+            if isinstance(auth, dict)
+            else None
+        )
+        require(
+            isinstance(token, str) and token,
+            "Docker registry did not return an access token",
+        )
+        digest = registry_head_digest(
+            "https://registry-1.docker.io/v2/"
+            + parse.quote(image["repository"], safe="/")
+            + "/manifests/"
+            + parse.quote(image["tag"], safe=""),
+            {
+                "Authorization": "Bearer " + token,
+                "Accept": (
+                    "application/vnd.docker.distribution.manifest.v2+json, "
+                    "application/vnd.docker.distribution.manifest.list.v2+json, "
+                    "application/vnd.oci.image.manifest.v1+json, "
+                    "application/vnd.oci.image.index.v1+json"
+                ),
+            },
+        )
+        if digest is None:
             return None
-        digests = (
-            [data["digest"]]
-            if "digest" in data
-            else [row.get("digest") for row in data.get("images", [])]
-        )
+        digests = [digest]
     require(
         digests
         and all(
