@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-exporter"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 description = "AI usage exporter"
 authors = ["みず <mizu.copo@gmail.com>"]
