@@ -61,7 +61,7 @@ PR CI は4対象の native runner で、mock CLI による通信・`/metrics`・
 
 ## Docker で起動
 
-イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成し、Python runtime・uv・venv・開発用依存関係を含めません。
+イメージには Codex CLI `0.153.4` の公式 Linux musl バイナリを SHA-256 検証して同梱します。Dockerfile は `linux/amd64` と `linux/arm64` に対応します。最終イメージは Alpine と Rust の実行バイナリ、Codex CLI、CA 証明書で構成します。
 
 ```bash
 docker build --check .
@@ -147,5 +147,3 @@ Dockerfile、`Cargo.toml` の依存関係、`Cargo.lock`、`.dockerignore` の�
 公開先は `mizucopo/ai-usage-exporter`、ログイン名は `mizucopo` です。GitHub Actions の repository secret `DOCKERHUB_TOKEN` に、このイメージへの push 権限を持つトークンを設定してください。
 
 PR 全体の差分を分類し、公開する PR には `release:patch`・`release:minor`・`release:major` のラベルを一つ付けます。採番元は `Cargo.toml` の `package.version` で、GitHub Actions が squash merge 後に採番し、Docker イメージ、Git tag、GitHub Release を公開します。PR では Rust 品質チェックと Docker ビルドを実行します。詳細は [CONTRIBUTING.md](CONTRIBUTING.md) と [docs/release.md](docs/release.md) を参照してください。
-
-今回の Rust 移植では性能計測・ベンチマークを行っていません。メモリ、イメージサイズ、起動・応答時間の改善量は未確認です。
