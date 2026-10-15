@@ -367,10 +367,7 @@ jobs:
       - name: Verify published image
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          : > "$RUNNER_TEMP/image-state"
-          GITHUB_OUTPUT="$RUNNER_TEMP/image-state" python3 -I .github/scripts/release.py image-state
-          grep -qx version_exists=true "$RUNNER_TEMP/image-state"
+        run: python3 -I .github/scripts/release.py image-verify
       - name: Create GitHub Release
         id: create-release
         if: steps.release-state.outputs.release_exists != 'true'
