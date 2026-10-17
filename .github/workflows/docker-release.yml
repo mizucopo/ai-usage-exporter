@@ -117,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
+      has_latest_image: ${{ steps.metadata.outputs.has_latest_image }}
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
       DOCKERHUB_USERNAME: "mizucopo"
@@ -155,6 +156,8 @@ jobs:
         run: |
           is_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "$RELEASE_PLAN_OUTPUT")"
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+          has_latest_image="$(jq -er '.publication.latest_image != null | tostring' "$RELEASE_PLAN_OUTPUT")"
+          echo "has_latest_image=$has_latest_image" >> "$GITHUB_OUTPUT"
       - name: Inspect GitHub Release
         id: release-state
         env:
@@ -326,6 +329,7 @@ jobs:
       - name: Verify existing image ownership
         if: steps.image-state.outputs.version_exists == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.image-state.outputs.image_tag }}
         run: bash .github/scripts/manage-docker-image-owner.sh verify "$TAG"
       - name: Build and validate native image
@@ -394,7 +398,7 @@ jobs:
 
   promote-latest:
     needs: [prepare, release]
-    if: needs.prepare.outputs.publish == 'true' && needs.release.outputs.is_prerelease == 'false'
+    if: needs.prepare.outputs.publish == 'true' && needs.release.outputs.is_prerelease == 'false' && needs.release.outputs.has_latest_image == 'true'
     runs-on: ubuntu-latest
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
@@ -441,3 +445,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.latest-state.outputs.release_tag }}
         run: gh release edit "$TAG" --latest
+
+  cleanup-image-owners:
+    needs: [prepare, release, promote-latest]
+    if: ${{ !cancelled() && needs.prepare.outputs.publish == 'true' && needs.release.result == 'success' && (needs.promote-latest.result == 'success' || needs.promote-latest.result == 'skipped') }}
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      DOCKERHUB_USERNAME: "mizucopo"
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout numbering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify numbering commit and read publication data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
+          printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
+          python3 -I .github/scripts/release.py plan
+
+      - name: Download verified Rust distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rust-release-*
+          path: ${{ runner.temp }}/rust-release
+      - name: Retain image digests and remove completed ownership markers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUST_RELEASE_DIR: ${{ runner.temp }}/rust-release
+        run: python3 -I .github/scripts/release.py image-owner-complete
