@@ -1705,6 +1705,14 @@ def read_rust_asset(git, gh, asset):
     )
 
 
+def rust_asset_checksum(git, gh, asset):
+    # A rerun must checksum the retained bytes, not a newly rebuilt archive.
+    digest = asset.get("digest", "")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        digest = "sha256:" + hashlib.sha256(read_rust_asset(git, gh, asset)).hexdigest()
+    return f"{digest.removeprefix('sha256:')}  {asset['name']}\n".encode()
+
+
 def upload_rust_asset(git, gh, release, assets, path):
     complete = completed_rust_asset(assets, path.name)
     if complete:
@@ -1759,16 +1767,7 @@ def rust_asset(git, gh, release, plan, assets):
                 )
     for archive in archives:
         uploaded = upload_rust_asset(git, gh, release, assets, archive)
-        # A rerun must checksum the retained bytes, not a newly rebuilt archive.
-        digest = uploaded.get("digest", "")
-        if not isinstance(digest, str) or not re.fullmatch(
-            r"sha256:[0-9a-f]{64}", digest
-        ):
-            digest = (
-                "sha256:"
-                + hashlib.sha256(read_rust_asset(git, gh, uploaded)).hexdigest()
-            )
-        expected = f"{digest.removeprefix('sha256:')}  {archive.name}\n".encode()
+        expected = rust_asset_checksum(git, gh, uploaded)
         with tempfile.TemporaryDirectory() as directory:
             checksum = Path(directory) / (archive.name + ".sha256")
             checksum.write_bytes(expected)
@@ -1936,10 +1935,14 @@ def complete_image_owners(git, gh, plan):
         for archive in rust_deliverables(
             git, plan, os.environ["RELEASE_SHA"], directory
         ):
-            for name in (archive.name, archive.name + ".sha256"):
-                require(
-                    completed_rust_asset(assets, name), f"Missing Rust asset: {name}"
-                )
+            uploaded = completed_rust_asset(assets, archive.name)
+            sidecar = completed_rust_asset(assets, archive.name + ".sha256")
+            require(uploaded and sidecar, f"Missing Rust asset: {archive.name}")
+            expected = rust_asset_checksum(git, gh, uploaded)
+            require(
+                read_rust_asset(git, gh, sidecar) == expected,
+                f"Published Rust checksum differs from archive: {archive.name}",
+            )
     body = release.get("body") or ""
     require(
         distribution_body(body, assets, plan["images"]) == body,

@@ -58,7 +58,7 @@ Docker Hub の共通 image 照会は、repository-level の権限・可視性確
 
 標準 Docker Release と Docker project pipeline は、同じ `cleanup-image-owners` job を使う。`release-main` の直列化を保持し、公開 job（全 image・Rust 配布物・Downloads の更新・draft 公開）と必要な `promote-latest` が成功した後だけ実行する。prerelease と `latest_image: null` は Latest job の skip を許す。失敗・キャンセル・進行中・部分公開では記録を残す。cleanup のみ失敗した場合も公開は維持し、全 job を再実行して再確認する。
 
-共通 `release.py image-owner-complete` は採番 trailer の元 run ID と Actions API の最新 attempt・job 結果を照合する（`actions: read` が必要）。公開 Release の tag・ID・分類、全 image の registry digest、同じ run の検証済み Rust manifest・配布物と対応する asset（実行ファイルを作らない library-only 等は archive 不要）、現在の Downloads 本文を再確認する。最新の完成済み安定版なら GitHub Latest と Docker latest の digest も確認する。古い版は新しい Latest を巻き戻さない。
+共通 `release.py image-owner-complete` は採番 trailer の元 run ID と Actions API の最新 attempt・job 結果を照合する（`actions: read` が必要）。公開 Release の tag・ID・分類、全 image の registry digest、同じ run の検証済み Rust manifest・配布物と対応する asset（実行ファイルを作らない library-only 等は archive 不要）、現在の Downloads 本文を再確認する。公開 archive の digest（API 未提供なら実 bytes）から checksum を求め、公開済み `.sha256` の実内容と名前を照合する。不一致・asset の欠落や重複・API/ダウンロード失敗では証拠の保存と所有記録の削除前に停止する。再ビルドによる圧縮 bytes の違いは許し、公開済み archive を上書きしない。最新の完成済み安定版なら GitHub Latest と Docker latest の digest も確認する。古い版は新しい Latest を巻き戻さない。
 
 全 image の所有記録 ref が `RELEASE_SHA` と一致することを確認してから、Release 本文の専用 HTML comment `repo-template:image-owners:v1` に schema・採番 SHA・release tag・全 image の宣言（registry/account/region/repository/tag を含む）と digest を保存し、読み返して確認する。既存の記録が異なる場合は書き換えない。リリースノートと Downloads は保持する。この証拠は既存の Git ref・Release と同じ repository の書き込み権限を信頼する。Release 編集時も専用 comment を保持する。
 
