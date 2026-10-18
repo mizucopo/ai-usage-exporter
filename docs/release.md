@@ -54,6 +54,35 @@ Docker Hub の共通 image 照会は、repository-level の権限・可視性確
 
 採番時の未使用判定と公開前の `image-state` は単発照会のまま維持する。確認中に image を再 build/push・上書きしない。部分公開後は元 run を再実行し、同じ commit/tag の所有権を検証した既存 image と完成済み native assets を再利用して、不足工程だけを続ける。公開直後の不在は反映遅延の可能性があるが、再試行成功だけで原因を断定しない。
 
+## Docker 所有記録の完了後整理
+
+標準 Docker Release と Docker project pipeline は、同じ `cleanup-image-owners` job を使う。`release-main` の直列化を保持し、公開 job（全 image・Rust 配布物・Downloads の更新・draft 公開）と必要な `promote-latest` が成功した後だけ実行する。prerelease と `latest_image: null` は Latest job の skip を許す。失敗・キャンセル・進行中・部分公開では記録を残す。cleanup のみ失敗した場合も公開は維持し、全 job を再実行して再確認する。
+
+共通 `release.py image-owner-complete` は採番 trailer の元 run ID と Actions API の最新 attempt・job 結果を照合する（`actions: read` が必要）。公開 Release の tag・ID・分類、全 image の registry digest、同じ run の検証済み Rust manifest・配布物と対応する asset（実行ファイルを作らない library-only 等は archive 不要）、現在の Downloads 本文を再確認する。公開 archive の digest（API 未提供なら実 bytes）から checksum を求め、公開済み `.sha256` の実内容と名前を照合する。不一致・asset の欠落や重複・API/ダウンロード失敗では証拠の保存と所有記録の削除前に停止する。再ビルドによる圧縮 bytes の違いは許し、公開済み archive を上書きしない。最新の完成済み安定版なら GitHub Latest と Docker latest の digest も確認する。古い版は新しい Latest を巻き戻さない。
+
+全 image の所有記録 ref が `RELEASE_SHA` と一致することを確認してから、Release 本文の専用 HTML comment `repo-template:image-owners:v1` に schema・採番 SHA・release tag・全 image の宣言（registry/account/region/repository/tag を含む）と digest を保存し、読み返して確認する。既存の記録が異なる場合は書き換えない。リリースノートと Downloads は保持する。この証拠は既存の Git ref・Release と同じ repository の書き込み権限を信頼する。Release 編集時も専用 comment を保持する。
+
+その後、公開計画にある `refs/heads/automation/docker-images/<image-tag>` だけを削除する。各 ref を読み直し、`--force-with-lease=<ref>:<RELEASE_SHA>` を付けて削除するため、別 SHA への競合では停止する。既に削除済みなら成功する。途中で一部だけ削除された場合も Release の証拠は残り、全 job の再実行で再確認・再試行できる。image、Release、Git tag、main、通常の作業 branch は削除しない。
+
+同版の再実行で image が存在し ref がない場合、`verify` は採番 commit/tag と公開計画を検証し、完成済み Release の証拠と現在の**全** image の digest・参照先・`RELEASE_SHA` が完全一致した場合だけ `record` を再生成する。既存 ref が別 SHA、証拠欠落・不正・不一致、image 不在、registry/API 照会失敗は停止する。欠落 ref を未使用 image とみなしたり、現在の SHA を無条件に記録したり、既存 image を再 push しない。再実行が全工程に成功した後に同じ cleanup を行う。
+
+### 既存の記録 branch を個別に整理する
+
+既存 remote branch を一括削除しない。利用先の別作業で、更新済み共通 helper を使う保守用 Actions job をレビューしてから、次の順で**一版ずつ**実行する。保守 workflow も `release-main`・`cancel-in-progress: false`・`queue: max` を使い、通常公開と重ねない。
+
+1. `git ls-remote --refs origin 'refs/heads/automation/docker-images/*'` は一覧確認だけに使う。対象版の exact ref/SHA、採番 trailer の Run/Tag、タグの指す commit、公開計画の全 image と対応する Release を確認する。通常の branch は対象外。
+2. 元 run の最新 attempt が完了・成功し、公開と必要な Latest job が成功している版だけ選ぶ。実行中・queued・失敗・キャンセル・draft・部分公開・証拠不明の版は除外する。古い workflow による再実行は古い helper を使うため、削除後の再実行にも更新済み helper を使える保守経路を先に確保する。確保できない版は残す。
+3. 保守 job は選択した採番 SHA を checkout する。レビュー済み更新 commit から新しい `release.py` と `manage-docker-image-owner.sh` を同じ別 directory（例 `$RUNNER_TEMP/owner-control`）へ取り出す。採番 commit の source・設定は編集しない。Rust 配布を持つ版は元 run の `rust-release-*` artifacts も取得し、`RUST_RELEASE_DIR` に配置する。manifest/配布物が失効・欠落して検証できない版は除外する。registry と GitHub の既存認証を使い、`contents: write` と `actions: read` を設定する。
+4. checkout の root で次を実行する。`RELEASE_SHA` は確認した exact SHA、`IMAGE_OWNER_COMPLETED_RUN_ID` はその trailer の元 run ID に設定し、`GITHUB_RUN_ID` は保守 workflow 自身の値を保持する。`GITHUB_REF` は main のまま実行する。
+
+   ```sh
+   python3 -I "$RUNNER_TEMP/owner-control/release.py" image-owner-complete
+   ```
+
+5. helper は元 run の完了・成功を API で再確認し、公開状態・全 ref/SHA の検証、証拠の保存と読み返し後に対象 ref だけを削除する。元 run を検証できない版、削除前に所有元が変わった版は停止する。記録保存後の削除失敗は、原因確認後に同じ版を同じ直列化 job で再実行する。遠隔 ref と残った証拠を再確認し、失敗を成功扱いにしない。
+
+更新前に誰かが記録 ref を消し、Release にも証拠がない image は自動採用しない。対応を別の信頼できる公開記録で調査し、復旧方針を決めるまで保持・停止する。
+
 ## 配布案内
 
 汎用 Release・Docker Release・Docker project pipeline は、添付済み asset と公開設定の image を本文の管理ブロックに案内する。既存のリリースノート・手書き本文は保持し、再実行では同じブロックを更新する。Docker Hub はリンクと実際の version tag の PULL コマンドを載せ、ECR は ECR の PULL コマンドを載せる。公開先の照会失敗・未提供 image は公開前に停止する。

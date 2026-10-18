@@ -1705,6 +1705,14 @@ def read_rust_asset(git, gh, asset):
     )
 
 
+def rust_asset_checksum(git, gh, asset):
+    # A rerun must checksum the retained bytes, not a newly rebuilt archive.
+    digest = asset.get("digest", "")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        digest = "sha256:" + hashlib.sha256(read_rust_asset(git, gh, asset)).hexdigest()
+    return f"{digest.removeprefix('sha256:')}  {asset['name']}\n".encode()
+
+
 def upload_rust_asset(git, gh, release, assets, path):
     complete = completed_rust_asset(assets, path.name)
     if complete:
@@ -1759,16 +1767,7 @@ def rust_asset(git, gh, release, plan, assets):
                 )
     for archive in archives:
         uploaded = upload_rust_asset(git, gh, release, assets, archive)
-        # A rerun must checksum the retained bytes, not a newly rebuilt archive.
-        digest = uploaded.get("digest", "")
-        if not isinstance(digest, str) or not re.fullmatch(
-            r"sha256:[0-9a-f]{64}", digest
-        ):
-            digest = (
-                "sha256:"
-                + hashlib.sha256(read_rust_asset(git, gh, uploaded)).hexdigest()
-            )
-        expected = f"{digest.removeprefix('sha256:')}  {archive.name}\n".encode()
+        expected = rust_asset_checksum(git, gh, uploaded)
         with tempfile.TemporaryDirectory() as directory:
             checksum = Path(directory) / (archive.name + ".sha256")
             checksum.write_bytes(expected)
@@ -1827,6 +1826,168 @@ def distribution(git, gh, plan):
         gh.repo(f"/releases/{release['id']}", method="PATCH", payload=payload)
 
 
+IMAGE_OWNER_START = "<!-- repo-template:image-owners:v1\n"
+IMAGE_OWNER_END = "\nrepo-template:image-owners:end -->"
+
+
+def owner_release(gh, plan):
+    matches = [r for r in gh.pages("/releases") if r["tag_name"] == plan["release_tag"]]
+    require(len(matches) == 1, "Expected one completed image release")
+    release = matches[0]
+    checked_release_id(release, plan)
+    require(release["draft"] is False, "Image release is still a draft")
+    return release
+
+
+def image_owner_receipt(plan):
+    images = []
+    for image in plan["images"]:
+        digest = image_digest(image)
+        require(digest is not None, f"Published image is missing: {image['name']}")
+        images.append({**image, "digest": digest})
+    require(images, "Image ownership requires images")
+    return {
+        "schema": 1,
+        "release_sha": os.environ["RELEASE_SHA"],
+        "release_tag": plan["release_tag"],
+        "images": images,
+    }
+
+
+def retained_image_receipt(body):
+    starts, ends = body.count(IMAGE_OWNER_START), body.count(IMAGE_OWNER_END)
+    if not starts and not ends:
+        return None
+    require(starts == ends == 1, "Ambiguous image ownership receipt")
+    start = body.index(IMAGE_OWNER_START) + len(IMAGE_OWNER_START)
+    end = body.index(IMAGE_OWNER_END)
+    require(end > start, "Invalid image ownership receipt")
+    receipt = json.loads(body[start:end])
+    require(
+        isinstance(receipt, dict)
+        and type(receipt.get("schema")) is int
+        and receipt["schema"] == 1,
+        "Unknown image ownership receipt schema",
+    )
+    return receipt
+
+
+def restore_image_owner(git, gh, plan, tag):
+    require(tag in {i["tag"] for i in plan["images"]}, "Unknown image owner tag")
+    release = owner_release(gh, plan)
+    retained = retained_image_receipt(release.get("body") or "")
+    require(retained is not None, "Existing image has no completed ownership receipt")
+    require(retained == image_owner_receipt(plan), "Image ownership receipt differs")
+    run(
+        "bash",
+        str(Path(__file__).with_name("manage-docker-image-owner.sh")),
+        "record",
+        tag,
+        cwd=git.root,
+    )
+
+
+def completed_image_run(git, gh, plan):
+    record = record_at(git, os.environ["RELEASE_SHA"])
+    require(record is not None, "Missing release numbering record")
+    require(
+        os.environ.get("GITHUB_ACTIONS") == "true",
+        "Cleanup requires a serialized Actions job",
+    )
+    historical_run = os.environ.get("IMAGE_OWNER_COMPLETED_RUN_ID")
+    run_id = historical_run or os.environ["GITHUB_RUN_ID"]
+    require(record["Run"] == run_id, "Cleanup requires the original release run")
+    state = gh.repo(f"/actions/runs/{run_id}")
+    if state["status"] != "completed":
+        require(
+            not historical_run
+            and state["status"] == "in_progress"
+            and os.environ.get("GITHUB_JOB") == "cleanup-image-owners"
+            and str(state["run_attempt"]) == os.environ.get("GITHUB_RUN_ATTEMPT"),
+            "Release run is not ready for image cleanup",
+        )
+    else:
+        require(state["conclusion"] == "success", "Release run did not succeed")
+    jobs = gh.pages(
+        f"/actions/runs/{run_id}/attempts/{state['run_attempt']}/jobs", key="jobs"
+    )
+    for name in ("release", "promote-latest"):
+        matches = [j for j in jobs if j["name"] == name]
+        allowed = {"success"}
+        if name == "promote-latest" and (
+            plan["is_prerelease"] or not plan["latest_image"]
+        ):
+            allowed.add("skipped")
+        require(
+            len(matches) == 1 and matches[0]["conclusion"] in allowed,
+            f"Release job is incomplete: {name}",
+        )
+
+
+def complete_image_owners(git, gh, plan):
+    completed_image_run(git, gh, plan)
+    release = owner_release(gh, plan)
+    receipt = image_owner_receipt(plan)
+    assets = gh.pages(f"/releases/{release['id']}/assets")
+    if plan.get("rust"):
+        directory = os.environ.get("RUST_RELEASE_DIR")
+        require(directory, "Verified Rust artifacts are required for image cleanup")
+        for archive in rust_deliverables(
+            git, plan, os.environ["RELEASE_SHA"], directory
+        ):
+            uploaded = completed_rust_asset(assets, archive.name)
+            sidecar = completed_rust_asset(assets, archive.name + ".sha256")
+            require(uploaded and sidecar, f"Missing Rust asset: {archive.name}")
+            expected = rust_asset_checksum(git, gh, uploaded)
+            require(
+                read_rust_asset(git, gh, sidecar) == expected,
+                f"Published Rust checksum differs from archive: {archive.name}",
+            )
+    body = release.get("body") or ""
+    require(
+        distribution_body(body, assets, plan["images"]) == body,
+        "Release distribution is incomplete",
+    )
+    if (
+        not plan["is_prerelease"]
+        and plan["latest_image"]
+        and latest(git, gh, os.environ["RELEASE_SHA"])
+    ):
+        require(
+            gh.repo("/releases/latest")["id"] == release["id"],
+            "GitHub Latest is incomplete",
+        )
+        image = next(i for i in receipt["images"] if i["name"] == plan["latest_image"])
+        require(
+            image_digest({**image, "tag": "latest"}) == image["digest"],
+            "Docker latest differs",
+        )
+    retained = retained_image_receipt(body)
+    require(retained is None or retained == receipt, "Image ownership receipt differs")
+    helper = str(Path(__file__).with_name("manage-docker-image-owner.sh"))
+    # Verify every owner before writing evidence or deleting any marker.
+    for image in plan["images"]:
+        run("bash", helper, "verify", image["tag"], cwd=git.root)
+    if retained is None:
+        body += (
+            "\n"
+            + IMAGE_OWNER_START
+            + canonical(receipt).decode()
+            + IMAGE_OWNER_END
+            + "\n"
+        )
+        gh.repo(f"/releases/{release['id']}", method="PATCH", payload={"body": body})
+    retained = gh.repo(f"/releases/{release['id']}")
+    checked_release_id(retained, plan)
+    require(
+        retained["draft"] is False
+        and retained_image_receipt(retained.get("body") or "") == receipt,
+        "Could not confirm the retained ownership receipt",
+    )
+    for image in plan["images"]:
+        run("bash", helper, "remove", image["tag"], cwd=git.root)
+
+
 def latest(git, gh, commit):
     if publication_at(git, commit)["is_prerelease"]:
         return False
@@ -1859,6 +2020,8 @@ def main():
             "latest",
             "image-state",
             "image-verify",
+            "image-owner-verify",
+            "image-owner-complete",
             "classification",
             "distribution",
             "rust-matrix",
@@ -1867,6 +2030,7 @@ def main():
         ],
     )
     parser.add_argument("--root", default=".")
+    parser.add_argument("--image-tag")
     args = parser.parse_args()
     git, gh = Git(args.root), GitHub()
     if args.action == "classification":
@@ -1905,6 +2069,12 @@ def main():
                 target,
                 os.environ["RUST_RELEASE_DIR"],
             )
+            values = {}
+        elif args.action == "image-owner-verify":
+            restore_image_owner(git, gh, plan["publication"], args.image_tag)
+            values = {}
+        elif args.action == "image-owner-complete":
+            complete_image_owners(git, gh, plan["publication"])
             values = {}
         elif args.action == "distribution":
             distribution(git, gh, plan["publication"])
