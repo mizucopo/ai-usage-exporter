@@ -109,7 +109,22 @@ async fn metrics(
 ) -> ([(header::HeaderName, &'static str); 1], String) {
     let body = state
         .collector
-        .collect_with(|| state.client.read_limits())
+        .collect_with(|| async {
+            state.client.read_limits().await.inspect_err(|error| {
+                // CodexError is publicly constructible; never print its payload.
+                let reason = match error.0 {
+                    "Codex command is empty" | "Codex process could not start" => "process_start",
+                    "Codex request timed out" => "timeout",
+                    "Codex response is invalid"
+                    | "Codex response is not an object"
+                    | "Codex response has no result object"
+                    | "Codex response is too large" => "invalid_response",
+                    "Codex rejected the request" => "request_rejected",
+                    _ => "request_failed",
+                };
+                eprintln!("Codex quota fetch failed: {reason}");
+            })
+        })
         .await;
     (
         [(
