@@ -2,6 +2,7 @@
 
 use std::fmt::{self, Write};
 use std::future::Future;
+use std::io::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
@@ -190,7 +191,8 @@ impl UsageCollector {
                             windows
                         }
                         Err(error) => {
-                            eprintln!("Codex quota parsing failed: {error}");
+                            let _ =
+                                writeln!(std::io::stderr(), "Codex quota parsing failed: {error}");
                             Vec::new()
                         }
                     },

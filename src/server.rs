@@ -1,6 +1,6 @@
 //! Environment settings and HTTP routing.
 
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, io::Write, sync::Arc};
 
 use axum::{Router, extract::State, http::header, routing::get};
 
@@ -122,7 +122,8 @@ async fn metrics(
                     "Codex rejected the request" => "request_rejected",
                     _ => "request_failed",
                 };
-                eprintln!("Codex quota fetch failed: {reason}");
+                // A failed log sink must not interrupt the scrape or cache update.
+                let _ = writeln!(std::io::stderr(), "Codex quota fetch failed: {reason}");
             })
         })
         .await;
