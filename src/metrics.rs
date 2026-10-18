@@ -2,6 +2,7 @@
 
 use std::fmt::{self, Write};
 use std::future::Future;
+use std::io::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
@@ -109,8 +110,8 @@ struct CachedUsage {
 /// Cache upstream results, including failures, while keeping countdowns current.
 ///
 /// The async lock covers the upstream fetch so simultaneous scrapes share a
-/// refresh. Fetching starts only when `collect_with` is called. Fetch errors are
-/// deliberately discarded so private upstream details cannot reach metrics.
+/// refresh. Fetching starts only when `collect_with` is called. Fetch error
+/// details stay with the caller so private upstream data cannot reach metrics.
 pub struct UsageCollector {
     cache_ttl: f64,
     wall_time: Box<dyn Fn() -> f64 + Send + Sync>,
@@ -189,7 +190,11 @@ impl UsageCollector {
                             cache.last_success = (self.wall_time)();
                             windows
                         }
-                        Err(_) => Vec::new(),
+                        Err(error) => {
+                            let _ =
+                                writeln!(std::io::stderr(), "Codex quota parsing failed: {error}");
+                            Vec::new()
+                        }
                     },
                     Err(_) => Vec::new(),
                 };

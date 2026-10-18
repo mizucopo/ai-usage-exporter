@@ -102,6 +102,8 @@ curl http://localhost:9173/metrics
 
 認証・通信・応答解析の失敗時は、残量・リセットのメトリックスを公開せず、成功フラグを `0` にします。次の取得は設定したキャッシュ期間だけ待ちます。過去のリセット時刻を含む応答でも連続取得しません。
 
+取得失敗時は標準エラーに `Codex quota fetch failed: <分類>` を1回出力します。分類は `process_start`（起動失敗）、`timeout`、`invalid_response`（不正な応答）、`request_rejected`、`request_failed`（その他の通信・処理失敗）です。利用枠データの解析失敗は `Codex quota parsing failed: <固定の理由>` で区別します。生の応答、子プロセスの stdout/stderr、認証情報、コマンド引数やパスは出力しません。成功時やキャッシュヒット時には失敗ログを出力しません。
+
 ## メトリックス
 
 | メトリックス | 内容 |
