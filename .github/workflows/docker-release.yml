@@ -104,7 +104,7 @@ jobs:
           RUST_RELEASE_DIR: ${{ runner.temp }}/rust-release
         run: python -I tests/release_smoke.py --target "$RUST_RELEASE_TARGET" --output "$RUST_RELEASE_DIR" --verify-existing
       - name: Retain verified Rust distribution
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ format('rust-release-{0}', matrix.target) }}
           path: ${{ runner.temp }}/rust-release/${{ matrix.target }}
@@ -383,7 +383,7 @@ jobs:
         run: python3 -I .github/scripts/release.py create
 
       - name: Download verified Rust distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: rust-release-*
           path: ${{ runner.temp }}/rust-release
@@ -473,7 +473,7 @@ jobs:
           python3 -I .github/scripts/release.py plan
 
       - name: Download verified Rust distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: rust-release-*
           path: ${{ runner.temp }}/rust-release
