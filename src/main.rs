@@ -5,19 +5,27 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        Some("--help" | "-h") => {
+    let mut arguments = std::env::args_os().skip(1);
+    let first_argument = arguments.next();
+    match (first_argument.as_deref(), arguments.next()) {
+        (None, None) => {}
+        (Some(argument), None) if argument == "--help" || argument == "-h" => {
             println!(
                 "ai-usage-exporter {}\n\nUsage: ai-usage-exporter [--help | --version]\n\nServes Prometheus metrics at /metrics. Configure with:\n  AI_USAGE_EXPORTER_HOST (default: 0.0.0.0)\n  AI_USAGE_EXPORTER_PORT (default: 9173)\n  AI_USAGE_EXPORTER_CACHE_TTL_SECONDS (default: 300)\n  AI_USAGE_EXPORTER_FETCH_TIMEOUT_SECONDS (default: 10)\n  CODEX_HOME (Codex CLI authentication directory)\n\nRequires a separately installed Codex CLI on PATH. Stop with Ctrl+C.",
                 env!("CARGO_PKG_VERSION")
             );
             return ExitCode::SUCCESS;
         }
-        Some("--version" | "-V") => {
+        (Some(argument), None) if argument == "--version" || argument == "-V" => {
             println!("ai-usage-exporter {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        _ => {}
+        _ => {
+            eprintln!(
+                "Invalid command-line arguments.\nUsage: ai-usage-exporter [--help | --version]\nConfigure the exporter with environment variables; see --help."
+            );
+            return ExitCode::from(2);
+        }
     }
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
