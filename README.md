@@ -57,6 +57,8 @@ export AI_USAGE_EXPORTER_PORT=9173
 
 停止は起動した terminal で `Ctrl+C`（Windows は `Ctrl+Break` も対応）を使います。macOS / Linux は `SIGTERM` でも停止できます。実行中の scrape は取得タイムアウトまで待って子プロセスを回収し、終了します。設定の既定値・キャッシュ・Prometheus の仕様は Docker と共通で、下の環境変数表を参照してください。バイナリの署名・macOS notarization は提供していません。
 
+起動引数は単独の `--help` / `-h`、または `--version` / `-V` のみ対応します。引数なしで通常起動します。未知のオプション・位置引数・余分な引数は、標準エラーに使い方を表示して終了コード `2` で終了し、サーバーを起動しません。ポートなどの設定は起動引数ではなく環境変数で指定してください。
+
 PR CI は4対象の native runner で、mock CLI による通信・`/metrics`・キャッシュ・停止、および配布 archive の checksum・展開・起動を検証します。これは実アカウント・一般利用者の実機での確認とは別です。実認証・課金 API はテストで使用しません。
 
 ## Docker で起動
