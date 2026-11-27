@@ -1,0 +1,16 @@
+groups:
+  - name: codex
+    interval: 30s
+    rules:
+      - alert: CodexExporterScrapeFailed
+        expr: up{job="codex"} == 0
+        for: 2m
+        annotations:
+          summary: 'Prometheus could not scrape the Codex exporter at {{ $labels.instance }}.'
+      - alert: CodexQuotaFetchFailed
+        expr: |
+          (ai_usage_exporter_scrape_success{job="codex"} == 0)
+          and on (job, instance) (up{job="codex"} == 1)
+        for: 2m
+        annotations:
+          summary: 'The exporter at {{ $labels.instance }} could not fetch Codex usage limits.'

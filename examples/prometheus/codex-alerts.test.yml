@@ -1,0 +1,98 @@
+rule_files:
+  - codex-alerts.yml
+evaluation_interval: 30s
+
+tests:
+  - name: Initial quota fetch failure and recovery
+    interval: 30s
+    input_series:
+      - series: 'up{job="codex", instance="exporter-a:9173"}'
+        values: '1+0x11'
+      - series: 'ai_usage_exporter_scrape_success{job="codex", instance="exporter-a:9173"}'
+        values: '0+0x10 1'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CodexQuotaFetchFailed
+        exp_alerts:
+          - exp_labels:
+              job: codex
+              instance: exporter-a:9173
+            exp_annotations:
+              summary: 'The exporter at exporter-a:9173 could not fetch Codex usage limits.'
+      - eval_time: 2m
+        alertname: CodexExporterScrapeFailed
+        exp_alerts: []
+      - eval_time: 5m30s
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+
+  - name: One exporter fails to fetch quotas, goes down, and recovers
+    interval: 30s
+    input_series:
+      - series: 'up{job="codex", instance="exporter-a:9173"}'
+        values: '1+0x5 0+0x4 1'
+      - series: 'ai_usage_exporter_scrape_success{job="codex", instance="exporter-a:9173"}'
+        # Missing samples leave the previous 0 visible to queries during the outage.
+        values: '1 0+0x4 _ _ _ _ _ 1'
+      - series: 'up{job="codex", instance="exporter-b:9173"}'
+        values: '1+0x11'
+      - series: 'ai_usage_exporter_scrape_success{job="codex", instance="exporter-b:9173"}'
+        values: '1+0x11'
+    alert_rule_test:
+      - eval_time: 2m30s
+        alertname: CodexQuotaFetchFailed
+        exp_alerts:
+          - exp_labels:
+              job: codex
+              instance: exporter-a:9173
+            exp_annotations:
+              summary: 'The exporter at exporter-a:9173 could not fetch Codex usage limits.'
+      - eval_time: 3m
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+      - eval_time: 4m30s
+        alertname: CodexExporterScrapeFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CodexExporterScrapeFailed
+        exp_alerts:
+          - exp_labels:
+              job: codex
+              instance: exporter-a:9173
+            exp_annotations:
+              summary: 'Prometheus could not scrape the Codex exporter at exporter-a:9173.'
+      - eval_time: 5m
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+      - eval_time: 5m30s
+        alertname: CodexExporterScrapeFailed
+        exp_alerts: []
+      - eval_time: 5m30s
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+
+  - name: Healthy target and target removal
+    interval: 30s
+    input_series:
+      - series: 'up{job="codex", instance="exporter-a:9173"}'
+        values: '1+0x4 stale'
+      - series: 'ai_usage_exporter_scrape_success{job="codex", instance="exporter-a:9173"}'
+        values: '1+0x4 stale'
+      - series: 'up{job="other", instance="exporter-a:9173"}'
+        values: '0+0x9'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CodexExporterScrapeFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
+      - eval_time: 4m30s
+        alertname: CodexExporterScrapeFailed
+        exp_alerts: []
+      - eval_time: 4m30s
+        alertname: CodexQuotaFetchFailed
+        exp_alerts: []
