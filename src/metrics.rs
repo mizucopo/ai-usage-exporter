@@ -255,32 +255,32 @@ fn render_metrics(windows: &[QuotaWindow], last_success: f64, now: f64) -> Strin
     if windows.is_empty() {
         return output;
     }
-    for (name, help) in [
+    type WindowMetric = (&'static str, &'static str, fn(&QuotaWindow, f64) -> f64);
+    let window_metrics: &[WindowMetric] = &[
         (
             "codex_rate_limit_remaining_ratio",
             "Quota remaining (0 to 1).",
+            |window, _| window.remaining,
         ),
         (
             "codex_rate_limit_reset_timestamp_seconds",
             "Next quota reset Unix time.",
+            |window, _| window.resets_at,
         ),
         (
             "codex_rate_limit_reset_seconds",
             "Seconds until the next quota reset.",
+            |window, now| (window.resets_at - now).max(0.0),
         ),
-    ] {
+    ];
+    for &(name, help, sample) in window_metrics {
         gauge_header(&mut output, name, help);
         for window in windows {
-            let value = match name {
-                "codex_rate_limit_remaining_ratio" => window.remaining,
-                "codex_rate_limit_reset_timestamp_seconds" => window.resets_at,
-                _ => (window.resets_at - now).max(0.0),
-            };
             writeln!(
                 output,
                 "{name}{{window=\"{}\"}} {}",
                 window.label,
-                metric_number(value)
+                metric_number(sample(window, now))
             )
             .unwrap();
         }
