@@ -131,7 +131,34 @@ scrape_configs:
       - targets: ["localhost:9173"]
 ```
 
-`scrape_timeout` は取得タイムアウトに HTTP 処理の余裕を加えた値にしてください。Prometheus を別コンテナーで動かす場合は、接続可能なエクスポーターのホスト名に置き換えてください。
+`scrape_timeout`（例では15秒）は、取得タイムアウト（既定10秒）に HTTP 処理の余裕を足した値にし、`scrape_interval` 以下に収めてください。Prometheus を別コンテナーで動かす場合は、接続可能なエクスポーターのホスト名に置き換えてください。
+
+## Prometheus アラート
+
+[アラートルール例](examples/prometheus/codex-alerts.yml)を `prometheus.yml` と同じディレクトリに置き、上の `codex` ジョブと組み合わせます。既存設定の `global` と `rule_files` に以下の項目を追加してください。
+
+```yaml
+global:
+  evaluation_interval: 30s
+rule_files:
+  - codex-alerts.yml
+```
+
+- `CodexExporterScrapeFailed` は、接続不能やタイムアウトなどで Prometheus が exporter を scrape できない場合（`up == 0`）に発火します。
+- `CodexQuotaFetchFailed` は、同じ `job` と `instance` で scrape が成功し（`up == 1`）、Codex 利用枠の取得が失敗している場合（`ai_usage_exporter_scrape_success == 0`）に発火します。停止した exporter の scrape 失敗を観測すると、前回の取得失敗の値が参照できても、この条件から外れます。
+
+どちらも条件が最初に成立した評価から `for: 2m` の間、各評価で成立し続けると発火します。2分は変更できる目安です。この例では scrape とルール評価がそれぞれ30秒間隔です。実際の発火時刻には、失敗を scrape で観測し、次にルールを評価するまでの時間も影響します。Codex の取得より先に scrape がタイムアウトすると `up == 0` になります。
+
+取得失敗の結果も TTL（既定300秒）でキャッシュされ、期限切れ後の scrape で再取得します。同じ失敗結果が複数回観測されるだけでも `for: 2m` を満たすため、発火から取得を試みた回数は判断できません。
+
+この例の対象は、Prometheus に登録中の `codex` ジョブの scrape と Codex 利用枠の取得成否です。設定からの削除やサービスディスカバリからの消失で対象の `up` 系列がなくなる場合は、`up == 0` では検知できません。
+
+リポジトリのルートから、上で読み込むルールを検証できます。
+
+```bash
+promtool check rules examples/prometheus/codex-alerts.yml
+promtool test rules examples/prometheus/codex-alerts.test.yml
+```
 
 ## 開発
 
