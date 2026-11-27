@@ -4,7 +4,7 @@ Codex の5時間・週間の利用制限について、残量とリセットま�
 
 ## バイナリで起動
 
-[GitHub Releases](https://github.com/mizucopo/ai-usage-exporter/releases) の Downloads から、自分の OS / CPU に合う archive と同名の `.sha256` を取得します。次の公開から、同じ version / tag に以下の4種類を添付します。過去の Release にない添付ファイルは追加しません。
+[GitHub Releases](https://github.com/mizucopo/ai-usage-exporter/releases) で対象のリリースを開き、Assets から自分の OS / CPU に合う archive と、archive 名の末尾に `.sha256` が付いたファイルを取得します。ファイル名の `<tag>` は選んだリリースのタグに置き換えます。古いリリースでは、対応する archive や `.sha256` がない場合があります。
 
 | OS / CPU | Archive | 実行ファイル |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ Windows の MSVC バイナリは `VCRUNTIME140.dll` を使用します。起動�
 
 exporter は scrape 時に Codex の `app-server` を子プロセスとして起動し、認証の保存方式に `file` を指定します。CLI と exporter を同じユーザー・同じ書き込み可能な `CODEX_HOME` で実行し、開始前に Codex CLI でログインしてください。既に file 方式でログイン済みなら、その `CODEX_HOME` を使えます。keyring だけに認証が保存されている場合は、運用者が CLI の file 方式でログインを用意する必要があります。exporter 自身はログインを行いません。
 
-Windows PowerShell（`<tag>` を Downloads の tag に置換）:
+Windows PowerShell の例
 
 ```powershell
 $archive = 'ai-usage-exporter-<tag>-windows-x86_64.zip' # ARM64 は windows-arm64.zip
