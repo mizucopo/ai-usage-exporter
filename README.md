@@ -135,11 +135,9 @@ scrape_configs:
 
 ## Prometheus アラート
 
-[アラートルール例](examples/prometheus/codex-alerts.yml)を `prometheus.yml` と同じディレクトリに置き、上の `codex` ジョブと組み合わせます。既存設定の `global` と `rule_files` に以下の項目を追加してください。
+[アラートルール例](examples/prometheus/codex-alerts.yml)を `prometheus.yml` と同じディレクトリに置き、上の `codex` ジョブと組み合わせます。`prometheus.yml` の `rule_files` に次のファイルを追加します。
 
 ```yaml
-global:
-  evaluation_interval: 30s
 rule_files:
   - codex-alerts.yml
 ```
@@ -147,7 +145,7 @@ rule_files:
 - `CodexExporterScrapeFailed` は、接続不能やタイムアウトなどで Prometheus が exporter を scrape できない場合（`up == 0`）に発火します。
 - `CodexQuotaFetchFailed` は、同じ `job` と `instance` で scrape が成功し（`up == 1`）、Codex 利用枠の取得が失敗している場合（`ai_usage_exporter_scrape_success == 0`）に発火します。停止した exporter の scrape 失敗を観測すると、前回の取得失敗の値が参照できても、この条件から外れます。
 
-どちらも条件が最初に成立した評価から `for: 2m` の間、各評価で成立し続けると発火します。2分は変更できる目安です。この例では scrape とルール評価がそれぞれ30秒間隔です。実際の発火時刻には、失敗を scrape で観測し、次にルールを評価するまでの時間も影響します。Codex の取得より先に scrape がタイムアウトすると `up == 0` になります。
+どちらも条件が最初に成立した評価から `for: 2m` の間、各評価で成立し続けると発火します。2分は変更できる目安です。この例では `codex` ジョブの scrape と、ルールグループの評価がそれぞれ30秒間隔です。実際の発火時刻には、失敗を scrape で観測し、次にルールを評価するまでの時間も影響します。Codex の取得より先に scrape がタイムアウトすると `up == 0` になります。
 
 取得失敗の結果も TTL（既定300秒）でキャッシュされ、期限切れ後の scrape で再取得します。同じ失敗結果が複数回観測されるだけでも `for: 2m` を満たすため、発火から取得を試みた回数は判断できません。
 

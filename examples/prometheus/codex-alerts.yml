@@ -1,5 +1,6 @@
 groups:
   - name: codex
+    interval: 30s
     rules:
       - alert: CodexExporterScrapeFailed
         expr: up{job="codex"} == 0
